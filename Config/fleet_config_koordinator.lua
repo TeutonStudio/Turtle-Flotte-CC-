@@ -3,7 +3,7 @@ return {
     group = "bergwerk_789_-968",      -- Arbeitsgruppen-ID. Muss pro Koordinator-Flotte eindeutig sein.
     id = "basis_789_-968",
     role = "coordinator",
-    protocolPrefix = "teuton_fleet_v1",
+    protocolPrefix = "teuton_fleet_v2",
 
     -- Der Koordinator steht direkt vor der persoenlichen Truhe und schaut sie an.
     chestSide = "front",

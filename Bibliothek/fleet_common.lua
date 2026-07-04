@@ -3,7 +3,7 @@
 
 local M = {}
 
-M.VERSION = "1.0.0"
+M.VERSION = "2.0.0"
 
 function M.loadConfig(requiredRole)
     local ok, cfg = pcall(require, "fleet_config")
@@ -11,7 +11,7 @@ function M.loadConfig(requiredRole)
         error("fleet_config.lua fehlt oder ist fehlerhaft: " .. tostring(cfg), 2)
     end
 
-    cfg.protocolPrefix = cfg.protocolPrefix or "teuton_fleet_v1"
+    cfg.protocolPrefix = cfg.protocolPrefix or "teuton_fleet_v2"
     assert(cfg.group and cfg.group ~= "", "fleet_config.group fehlt")
     assert(cfg.id and cfg.id ~= "", "fleet_config.id fehlt")
 

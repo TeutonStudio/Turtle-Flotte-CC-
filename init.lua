@@ -2,8 +2,8 @@
 -- Bootstrap fuer Teuton-Fleet. Dieses Skript selbst per wget von GitHub laden,
 -- danach laedt es die benoetigten Rollen-Dateien nach.
 
-local DEFAULT_BASE_URL = "https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main"
-local VERSION = "1.1.1"
+local DEFAULT_BASE_URL = "https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master"
+local VERSION = "2.0.0"
 
 local function lib(name) return { src = "Bibliothek/" .. name, dst = name } end
 local function script(name) return { src = "Skripte/" .. name, dst = name } end
@@ -60,7 +60,7 @@ local function download(baseUrl, file)
     local url = baseUrl:gsub("/$", "") .. "/" .. src
     if fs.exists(dst) then fs.delete(dst) end
     print("Lade " .. src .. " -> " .. dst)
-    local ok = shell.run("wget", "-f", url, dst)
+    local ok = shell.run("wget", url, dst)
     if not ok or not fs.exists(dst) then error("Download fehlgeschlagen: " .. url) end
 end
 
@@ -70,7 +70,7 @@ local function configFor(role, group, id, coordinator)
     group = %q,
     id = %q,
     role = "coordinator",
-    protocolPrefix = "teuton_fleet_v1",
+    protocolPrefix = "teuton_fleet_v2",
     chestSide = "front",
     deploySide = "right",
     deploySides = { "right", "left", "back", "top" },
@@ -96,7 +96,7 @@ local function configFor(role, group, id, coordinator)
         return string.format([[return {
     group = %q,
     coordinator = %q,
-    protocolPrefix = "teuton_fleet_v1",
+    protocolPrefix = "teuton_fleet_v2",
     timeout = 60,
 }]], group, coordinator)
     end
@@ -107,7 +107,7 @@ local function configFor(role, group, id, coordinator)
     role = "worker",
     workerRole = %q,
     coordinator = %q,
-    protocolPrefix = "teuton_fleet_v1",
+    protocolPrefix = "teuton_fleet_v2",
     statusInterval = 5,
     reportItems = false,
     minFuel = 500,

@@ -1,7 +1,7 @@
 -- flotte.lua
 -- Taschencomputer-Steuerung fuer Koordinator/Worker-Flotten.
 
-local DEFAULT_PREFIX = "teuton_fleet_v1"
+local DEFAULT_PREFIX = "teuton_fleet_v2"
 
 local function loadPocketConfig()
     local ok, cfg = pcall(require, "fleet_pocket_config")

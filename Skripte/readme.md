@@ -7,8 +7,8 @@ Diese Befehle verwenden das Repository `TeutonStudio/Turtle-Flotte-CC-`.
 ## Taschencomputer
 
 ```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main/init.lua init
-init pocket bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init
+init pocket bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
 ## Koordinator
@@ -16,8 +16,8 @@ init pocket bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/
 Koordinator-Turtle mit Endermodem und Chatty/Chatbox vor die Init-Truhe stellen.
 
 ```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main/init.lua init
-init koordinator bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init
+init koordinator bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
 Danach in `fleet_config.lua` `start`, `facing` und `initChest` setzen.
@@ -27,29 +27,29 @@ Danach in `fleet_config.lua` `start`, `facing` und `initChest` setzen.
 Bergbau:
 
 ```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main/init.lua init
-init bergbau bergwerk_01 bergbau_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init
+init bergbau bergwerk_01 bergbau_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
 Graben:
 
 ```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main/init.lua init
-init graben bergwerk_01 graben_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init
+init graben bergwerk_01 graben_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
 Handwerk:
 
 ```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main/init.lua init
-init handwerk bergwerk_01 handwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init
+init handwerk bergwerk_01 handwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
 Holzfaeller:
 
 ```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main/init.lua init
-init holzfaeller bergwerk_01 holz_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init
+init holzfaeller bergwerk_01 holz_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
 ## Taschencomputer-Befehle
