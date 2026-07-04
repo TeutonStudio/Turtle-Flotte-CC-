@@ -2,7 +2,7 @@
 -- Bootstrap fuer Teuton-Fleet. Dieses Skript selbst per wget von GitHub laden,
 -- danach laedt es die benoetigten Rollen-Dateien nach.
 
-local DEFAULT_BASE_URL = "https://raw.githubusercontent.com/DEIN_USER/DEIN_REPO/main"
+local DEFAULT_BASE_URL = "https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/main"
 local VERSION = "1.1.1"
 
 local function lib(name) return { src = "Bibliothek/" .. name, dst = name } end
