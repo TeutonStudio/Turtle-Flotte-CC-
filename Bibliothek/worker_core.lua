@@ -111,6 +111,9 @@ function M.run(roleModule)
             request_id = state.currentRequest,
             reason = reason,
             detail = detail,
+            job = state.job,
+            jobKind = state.job and state.job.kind or state.currentJob,
+            jobChest = state.job and state.job.chest or nil,
             pos = nav.getPos(),
             facing = nav.getFacingName(),
             status = makeStatus(),
@@ -169,6 +172,7 @@ function M.run(roleModule)
         state.busy = true
         state.abort = false
         state.currentJob = msg.job and msg.job.kind or "job"
+        state.job = msg.job
         state.currentRequest = msg.request_id
         state.coordinatorRednetId = sender
         state.lastError = nil
@@ -179,9 +183,11 @@ function M.run(roleModule)
             nav = nav,
             progress = reportProgress,
             status = makeStatus,
+            job = msg.job,
             requestService = requestService,
         }
 
+        local jobResult
         local ok, err = pcall(function()
             local fuel = turtle.getFuelLevel()
             if fuel ~= "unlimited" then
@@ -192,7 +198,7 @@ function M.run(roleModule)
                     if not fuelOk then error(fuelErr) end
                 end
             end
-            roleModule.run(ctx, msg.job or {})
+            jobResult = roleModule.run(ctx, msg.job or {})
         end)
 
         if ok then
@@ -202,6 +208,7 @@ function M.run(roleModule)
                 worker = cfg.id,
                 workerRole = state.role,
                 request_id = msg.request_id,
+                result = jobResult,
                 status = makeStatus(),
             })
         else
@@ -220,6 +227,7 @@ function M.run(roleModule)
         state.busy = false
         state.abort = false
         state.currentJob = nil
+        state.job = nil
         state.currentRequest = nil
     end
 

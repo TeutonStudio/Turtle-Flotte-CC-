@@ -115,6 +115,20 @@ local function printStatus(status)
     if status.currentJobChest then print("Job-Truhe: " .. vecString(status.currentJobChest)) end
     if status.queuedServiceRequests then print("Service-Warteschlange: " .. tostring(status.queuedServiceRequests)) end
     print("Depotseite: " .. tostring(status.chestSide) .. " | Deployseite: " .. tostring(status.deploySide))
+    if status.initStatus then
+        local init = status.initStatus
+        print("Init: " .. (init.initialized and "initialisiert" or "offen") ..
+            " | geplant " .. tostring(init.plannedWorkers) ..
+            " | online " .. tostring(init.onlineWorkers) ..
+            " | fehlend " .. tostring(init.missingWorkers) ..
+            " | Fuel-Reserve " .. tostring(init.fuelReserve))
+        for _, slot in ipairs(init.formationSlots or {}) do
+            print("  Slot " .. tostring(slot.label or slot.index) ..
+                " | Reihe " .. tostring(slot.row) ..
+                " | Seite " .. tostring(slot.side) ..
+                " | " .. (slot.occupied and "belegt" or "offen"))
+        end
+    end
     if status.lastError then print("Letzter Fehler: " .. tostring(status.lastError)) end
     print("")
     print("Worker:")
@@ -149,6 +163,7 @@ local function usage()
     print("  flotte deploy [all|rolle]")
     print("  flotte stop")
     print("  flotte abbau <truhe:x,y,z> <punkt1:x,y,z> <punkt2:x,y,z>")
+    print("  flotte abbau lager <truhe:x,y,z> von <punkt1:x,y,z> bis <punkt2:x,y,z>")
     print("  flotte lager_wechsel <truhe:x,y,z>")
     print("  flotte craft <rezept> [anzahl]")
     print("  flotte job <rolle> <kind> <truhe:x,y,z> <punkt1:x,y,z> <punkt2:x,y,z>")
@@ -227,9 +242,16 @@ elseif cmd == "stop" then
     if msg then print(tostring(msg.message or msg.error or msg.kind)) end
 
 elseif cmd == "abbau" then
-    local chest = parseVec(args[2])
-    local p1 = parseVec(args[3])
-    local p2 = parseVec(args[4])
+    local chest, p1, p2
+    if args[2] == "lager" and args[4] == "von" and args[6] == "bis" then
+        chest = parseVec(args[3])
+        p1 = parseVec(args[5])
+        p2 = parseVec(args[7])
+    else
+        chest = parseVec(args[2])
+        p1 = parseVec(args[3])
+        p2 = parseVec(args[4])
+    end
     if not chest or not p1 or not p2 then usage(); return end
     local msg = sendCommand("abbau", { chest = chest, p1 = p1, p2 = p2 })
     if msg then print(tostring(msg.message or msg.error or msg.kind)) end

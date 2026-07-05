@@ -59,6 +59,55 @@ local function mineLayer(ctx, area, y)
     end
 end
 
+local function scanHighestBlock(ctx, area)
+    for y = area.maxY, area.minY, -1 do
+        ctx.progress("Vorbereitung: suche Blockniveau Y=" .. tostring(y))
+        ctx.nav.goTo({ x = area.minX, y = y + 1, z = area.minZ })
+        local dir = 1
+        for z = area.minZ, area.maxZ do
+            local fromX = dir == 1 and area.minX or area.maxX
+            local toX = dir == 1 and area.maxX or area.minX
+            ctx.nav.goTo({ x = fromX, y = y + 1, z = z })
+            while ctx.nav.getPos().x ~= toX do
+                local okInspect, data = turtle.inspectDown()
+                if okInspect then
+                    local p = ctx.nav.getPos()
+                    return { x = p.x, y = y, z = p.z, block = data and data.name or "unbekannt" }
+                end
+                if ctx.nav.getPos().x < toX then ctx.nav.turnTo("east") else ctx.nav.turnTo("west") end
+                ctx.nav.forwardDig()
+            end
+            local okInspect, data = turtle.inspectDown()
+            if okInspect then
+                local p = ctx.nav.getPos()
+                return { x = p.x, y = y, z = p.z, block = data and data.name or "unbekannt" }
+            end
+            dir = dir * -1
+        end
+    end
+    return nil
+end
+
+local function buildAccess(ctx, area, highest)
+    if not highest then return end
+    ctx.progress("Vorbereitung: Zugang bis Y=" .. tostring(highest.y) .. " bauen")
+    local x = area.minX
+    local z = area.minZ
+    ctx.nav.goTo({ x = x, y = area.maxY + 1, z = z })
+    while ctx.nav.getPos().y > highest.y + 1 do
+        if x < area.maxX then
+            x = x + 1
+            ctx.nav.turnTo("east")
+            ctx.nav.forwardDig()
+        elseif z < area.maxZ then
+            z = z + 1
+            ctx.nav.turnTo("south")
+            ctx.nav.forwardDig()
+        end
+        ctx.nav.downDig()
+    end
+end
+
 function role.run(ctx, job)
     assert(job.p1 and job.p2, "job.p1 und job.p2 fehlen")
     if job.chest then ctx.nav.setChest(job.chest); ctx.state.chest = job.chest end
@@ -69,6 +118,13 @@ function role.run(ctx, job)
 
     local area = fleet.normalizeArea(job.p1, job.p2)
     if job.chest and fleet.insideArea(job.chest, area) then error("Truhe liegt im Abbaubereich") end
+
+    if job.kind == "abbau_prepare" then
+        local highest = scanHighestBlock(ctx, area)
+        if highest then buildAccess(ctx, area, highest) end
+        ctx.requestService("inventory_unload", { reason = "prepare_done" })
+        return { discoveredHighest = highest, empty = highest == nil }
+    end
 
     -- Von oben nach unten: erst ueber den Bereich, dann runter.
     ctx.nav.goTo({ x = area.minX, y = area.maxY + 1, z = area.minZ })

@@ -42,7 +42,7 @@ Danach steht der Befehl `flotte` zur Verfuegung.
 
 ## Koordinator Einrichten
 
-Der Koordinator ist eine Turtle, die vor der Init-/Personal-Truhe steht und in Richtung dieser Truhe schaut.
+Der Koordinator ist eine Turtle, die vor der Init-/Personal-Truhe steht. Die Init-Truhe steht hinter dem Koordinator.
 
 Der Koordinator braucht:
 
@@ -64,7 +64,7 @@ Danach `fleet_config.lua` auf dem Koordinator pruefen und ausfuellen:
 start = { x = 789, y = 64, z = -967 }
 facing = "north"
 initChest = { x = 789, y = 64, z = -968 }
-chestSide = "front"
+chestSide = "back"
 ```
 
 Wichtig:
@@ -72,7 +72,7 @@ Wichtig:
 - `start` ist die GPS-Startposition des Koordinators.
 - `facing` ist die Blickrichtung beim Start.
 - `initChest` ist die Koordinate der Init-/Personal-Truhe.
-- `chestSide` ist die Seite, auf der die Truhe beim Start steht, normalerweise `front`.
+- `chestSide` ist die Seite, auf der die Truhe beim Start steht, normalerweise `back`.
 
 Ohne `initChest` kann der Koordinator Worker deployen, aber nach Servicefahrten nicht sicher zur Ursprungstruhe zurueckkehren.
 
@@ -200,7 +200,20 @@ Zeigt Koordinator, aktuelle Bericht-ID, Job-Truhe, Service-Warteschlange und bek
 flotte deploy all
 ```
 
-Deployt Worker aus der Init-Truhe und gibt jedem Worker einen Stack Treibstoff.
+Deployt standardmaessig vier bereits installierte Worker-Turtles aus der Init-Truhe. Die Init-Truhe steht hinter dem Koordinator (`chestSide = "back"`). In der Truhe muessen die Worker-Turtles bereits `startup.lua`, `fleet_config.lua`, die passende Rolle und ein Modem haben.
+
+Die Standardformation ist:
+
+```text
+1. Worker links platzieren, 64 Fuel-Items geben
+2. Worker rechts platzieren, 64 Fuel-Items geben
+3. Koordinator faehrt 1 Block vor
+4. Worker links platzieren, 64 Fuel-Items geben
+5. Worker rechts platzieren, 64 Fuel-Items geben
+6. Koordinator faehrt erneut 1 Block vor
+```
+
+Wenn `initChest` in der Koordinator-Config gesetzt ist, kann der Koordinator zur Init-Truhe zurueckfahren und Nachschub holen. Ohne `initChest` laedt er die benoetigten Worker und Fuel-Items vor dem ersten Vorfahren vor.
 
 ```text
 flotte deploy bergbau
@@ -221,9 +234,22 @@ Format:
 
 ```text
 flotte abbau <job-truhe:x,y,z> <punkt1:x,y,z> <punkt2:x,y,z>
+flotte abbau lager <job-truhe:x,y,z> von <punkt1:x,y,z> bis <punkt2:x,y,z>
 ```
 
 Der Koordinator zerlegt den Bereich in Y-Schichten von oben nach unten und vergibt Schichten an freie Bergbau-Worker. Worker bleiben bei vollem Inventar oder Treibstoffbedarf am Arbeitsplatz. Der Koordinator arbeitet die Service-Warteschlange ab, bringt Treibstoff und transportiert Items zur Job-Truhe.
+
+Der Abbau laeuft zweistufig:
+
+```text
+Etappe 1: abbau_prepare
+  Ein Bergbau-Worker sucht im Quader das hoechste tatsaechlich vorhandene Blockniveau und baut einen Zugang bis dorthin.
+
+Etappe 2: abbau
+  Der Koordinator startet nur die Schichten von diesem gefundenen Hoechstpunkt bis zur Unterkante des Bereichs.
+```
+
+Wenn im Quader kein Block gefunden wird, endet der Auftrag sauber als leerer Auftrag statt mit einem Fehler.
 
 ### Job-Truhe Wechseln
 

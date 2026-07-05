@@ -32,18 +32,35 @@ local state = {
     serviceQueue = {},
     fuelEmptyWarned = false,
     activeJobs = {},
+    formation = {
+        initialized = false,
+        slots = {},
+    },
 }
 
 local reports = {}
 local DEFAULT_DEPLOY_SIDES = { "left", "right", "front" }
 local LEGACY_DEPLOY_SIDES = { "right", "left", "back", "top" }
+local appendReport
+local log
+local chat
+local withInitChest
+local leaveInitChest
 
-local function log(text)
+local function shortage(kind, text, extra, reportId)
+    state.lastError = text
+    log(text)
+    chat(text)
+    appendReport(reportId or state.currentReportId, "Mangelmeldung/" .. tostring(kind) .. ": " .. text, extra)
+    return text
+end
+
+function log(text)
     state.progress = text
     print("[Koordinator] " .. text)
 end
 
-local function chat(text)
+function chat(text)
     if not cfg.chat or cfg.chat.enabled == false then return end
     for _, name in ipairs(peripheral.getNames()) do
         local p = peripheral.wrap(name)
@@ -107,7 +124,7 @@ local function saveReport(report)
     ih.close()
 end
 
-local function appendReport(reportId, text, extra)
+function appendReport(reportId, text, extra)
     if not reportId then return end
     local report = reports[reportId]
     if not report then return end
@@ -237,6 +254,10 @@ local function isTurtleItem(detail)
     return detail and type(detail.name) == "string" and detail.name:find("turtle", 1, true) ~= nil
 end
 
+local function isTurtleBlock(data)
+    return data and type(data.name) == "string" and data.name:find("turtle", 1, true) ~= nil
+end
+
 local function isFuelSlot(slot)
     if not slot or turtle.getItemCount(slot) <= 0 then return false end
     local old = turtle.getSelectedSlot()
@@ -249,13 +270,13 @@ end
 local function returnSlotToChest(slot)
     if not slot or turtle.getItemCount(slot) <= 0 then return true end
     turtle.select(slot)
-    return dropTo(cfg.chestSide or "front")
+    return dropTo(state.depotAccessSide or cfg.chestSide or "front")
 end
 
-local function returnNonFuelToChest()
+local function returnNonFuelToChest(preserveTurtles)
     for i = 1, 16 do
         local d = turtle.getItemDetail(i)
-        if d and not isFuelSlot(i) then
+        if d and not isFuelSlot(i) and not (preserveTurtles and isTurtleItem(d)) then
             returnSlotToChest(i)
         end
     end
@@ -310,9 +331,37 @@ local function deploySides()
     return copyList(DEFAULT_DEPLOY_SIDES)
 end
 
+local function initFormation()
+    if type(cfg.initFormation) == "table" and #cfg.initFormation > 0 then return cfg.initFormation end
+    local sides = deploySides()
+    local rows = {}
+    local row = { sides = {}, moveForwardAfter = false }
+    for _, side in ipairs(sides) do row.sides[#row.sides + 1] = side end
+    rows[1] = row
+    return rows
+end
+
+local function plannedFormationSlots(limit)
+    local slots = {}
+    limit = limit or cfg.deployCount or 4
+    for rowIndex, row in ipairs(initFormation()) do
+        for _, side in ipairs(row.sides or {}) do
+            if #slots >= limit then return slots end
+            slots[#slots + 1] = {
+                index = #slots + 1,
+                row = rowIndex,
+                side = side,
+                label = "Reihe " .. tostring(rowIndex) .. " " .. tostring(side),
+            }
+        end
+    end
+    return slots
+end
+
 local function deployCount()
     local count = cfg.deployCount or #(cfg.workers or {})
-    if usesLegacyDeployLayout() and count == 4 then count = #DEFAULT_DEPLOY_SIDES end
+    if type(cfg.initFormation) == "table" and #cfg.initFormation > 0 and count == 0 then count = #plannedFormationSlots(99) end
+    if usesLegacyDeployLayout() and count == 4 and not cfg.initFormation then count = #DEFAULT_DEPLOY_SIDES end
     if count <= 0 then count = 1 end
     return count
 end
@@ -342,13 +391,16 @@ local function warnLowFuelBuffer(available)
     end
 end
 
+local pullFuelFromChest
+
 local function pullUntilTurtleFound(label)
-    local chestSide = cfg.chestSide or "front"
-    local limit = cfg.searchPullLimit or 24
+    local chestSide = state.depotAccessSide or cfg.chestSide or "front"
+    local limit = cfg.searchPullLimit or 64
 
     local slot = findTurtleSlotInInventory()
     if slot then return slot end
 
+    local held = {}
     for i = 1, limit do
         local ok, err = suckFrom(chestSide, 1)
         if not ok then
@@ -358,17 +410,64 @@ local function pullUntilTurtleFound(label)
 
         slot = findTurtleSlotInInventory()
         if slot then return slot end
+        for s = 1, 16 do
+            if turtle.getItemCount(s) > 0 and not held[s] then held[s] = true end
+        end
     end
 
-    error("Keine Turtle in der Truhe gefunden" .. (label and (" fuer " .. label) or ""))
+    returnNonFuelToChest()
+    error(shortage("worker", "Keine Turtle in der Init-Truhe gefunden" .. (label and (" fuer " .. label) or ""), {
+        label = label,
+        searchPullLimit = limit,
+    }))
 end
 
-local function pullFuelFromChest(minItems)
+local function countTurtlesInInventory()
+    local count = 0
+    for i = 1, 16 do
+        local d = turtle.getItemDetail(i)
+        if isTurtleItem(d) then count = count + turtle.getItemCount(i) end
+    end
+    return count
+end
+
+local function prefetchInitSupplies(workerCount)
+    state.atInitChest = true
+    state.depotAccessSide = cfg.chestSide or "back"
+    local limit = (cfg.searchPullLimit or 64) * workerCount
+    local attempts = 0
+    while countTurtlesInInventory() < workerCount do
+        attempts = attempts + 1
+        if attempts > limit then
+            error(shortage("worker", "Nicht genug Worker-Turtles zum Vorladen gefunden: " .. tostring(countTurtlesInInventory()) .. "/" .. tostring(workerCount), {
+                required = workerCount,
+                found = countTurtlesInInventory(),
+            }))
+        end
+        local ok = suckFrom(state.depotAccessSide, 1)
+        if not ok then
+            error(shortage("worker", "Init-Truhe enthaelt nicht genug Worker-Turtles: " .. tostring(countTurtlesInInventory()) .. "/" .. tostring(workerCount), {
+                required = workerCount,
+                found = countTurtlesInInventory(),
+            }))
+        end
+    end
+    local fuelNeeded = workerCount * (cfg.workerFuelItems or 64) + (cfg.coordinatorFuelReserveItems or 64)
+    if countFuelInInventory() < fuelNeeded then
+        state.preserveTurtlesDuringFuelSearch = true
+        pullFuelFromChest(fuelNeeded - countFuelInInventory())
+        state.preserveTurtlesDuringFuelSearch = false
+    end
+    state.atInitChest = false
+    state.depotAccessSide = nil
+end
+
+function pullFuelFromChest(minItems)
     minItems = minItems or (cfg.workerFuelItems or 8)
     if minItems <= 0 then return 0 end
 
-    local chestSide = cfg.chestSide or "front"
-    local limit = cfg.fuelSearchPullLimit or cfg.searchPullLimit or 24
+    local chestSide = state.depotAccessSide or cfg.chestSide or "front"
+    local limit = cfg.fuelSearchPullLimit or cfg.searchPullLimit or math.max(128, minItems * 3)
     local before = countFuelInInventory()
     local heldNonFuel = false
 
@@ -387,10 +486,17 @@ local function pullFuelFromChest(minItems)
 
     -- Keep accidental depot items in inventory during the search so the next suck
     -- can reach later chest slots instead of pulling the same turtle forever.
-    if heldNonFuel then returnNonFuelToChest() end
+    if heldNonFuel then returnNonFuelToChest(state.preserveTurtlesDuringFuelSearch) end
 
     local pulled = countFuelInInventory() - before
-    if pulled < minItems then warnLowFuelBuffer(countFuelInInventory()) end
+    if pulled < minItems then
+        warnLowFuelBuffer(countFuelInInventory())
+        shortage("fuel", "Zu wenig Treibstoff in der Init-Truhe: " .. tostring(pulled) .. "/" .. tostring(minItems) .. " Items gezogen", {
+            requested = minItems,
+            pulled = pulled,
+            available = countFuelInInventory(),
+        })
+    end
     return pulled
 end
 
@@ -417,21 +523,28 @@ local function fuelPlacedWorker(side)
     if wanted <= 0 then return 0 end
 
     if countFuelInInventory() < wanted then
-        pullFuelFromChest(wanted - countFuelInInventory())
+        if state.atInitChest then
+            pullFuelFromChest(wanted - countFuelInInventory())
+        else
+            withInitChest(function()
+                pullFuelFromChest(wanted - countFuelInInventory())
+            end)
+        end
     end
 
     local dropped = dropFuelToWorker(side, wanted)
-
-    -- Alles, was beim Suchen aus der Truhe versehentlich mitkam, wieder zuruecklegen.
-    -- Fuel darf ebenfalls zurueck, wenn cfg.keepFuelInCoordinator nicht gesetzt ist.
-    if not cfg.keepFuelInCoordinator then
-        for i = 1, 16 do
-            local d = turtle.getItemDetail(i)
-            if d then returnSlotToChest(i) end
-        end
-    else
-        returnNonFuelToChest()
+    if dropped < wanted then
+        local text = shortage("fuel", "Worker auf " .. tostring(side) .. " erhielt nur " .. tostring(dropped) .. "/" .. tostring(wanted) .. " Treibstoff-Items", {
+            side = side,
+            wanted = wanted,
+            dropped = dropped,
+        })
+        if dropped <= 0 then error(text) end
     end
+
+    -- Fuel bleibt als Koordinator-Reserve im Inventar. Nicht-Fuel wird nur dann
+    -- zurueckgelegt, wenn wir gerade wirklich an der Init-Truhe arbeiten.
+    if state.atInitChest then returnNonFuelToChest() end
 
     return dropped
 end
@@ -441,6 +554,13 @@ local function deployOne(label, side)
     if detectTo(side) then
         local okInspect, data = inspectTo(side)
         local blockName = okInspect and data and data.name or "unbekannt"
+        if isTurtleBlock(data) then
+            appendReport(state.currentReportId, "Formation-Slot bereits durch Turtle belegt: " .. tostring(label), {
+                side = side,
+                block = blockName,
+            })
+            return side, "occupied"
+        end
         local dug = digTo(side)
         if not dug or detectTo(side) then
             local text = "Deploy-Seite blockiert durch " .. tostring(blockName) .. " auf " .. tostring(side)
@@ -455,13 +575,20 @@ local function deployOne(label, side)
     end
 
     log("Ziehe Worker aus Depot" .. (label and (" fuer " .. label) or ""))
-    local slot = pullUntilTurtleFound(label)
+    local slot = findTurtleSlotInInventory()
+    if slot then
+        -- Bereits vorgeladen.
+    elseif state.atInitChest then
+        slot = pullUntilTurtleFound(label)
+    else
+        slot = withInitChest(function() return pullUntilTurtleFound(label) end)
+    end
     turtle.select(slot)
 
     log("Platziere Worker nach " .. side)
     local placed, placeErr = placeTo(side)
     if not placed then
-        returnSlotToChest(slot)
+        withInitChest(function() returnSlotToChest(slot) end)
         error("Konnte Worker nicht platzieren auf " .. tostring(side) .. ": " .. tostring(placeErr))
     end
 
@@ -526,6 +653,29 @@ local function waitForRole(role, timeout)
     end
 end
 
+local function onlineWorkerCount()
+    local count = 0
+    for _, w in pairs(workers) do
+        if w.rednetId then count = count + 1 end
+    end
+    return count
+end
+
+local function waitForOnlineWorkers(required, timeout)
+    local deadline = os.epoch("utc") + ((timeout or cfg.workerOnlineWait or cfg.deployWait or 12) * 1000)
+    while onlineWorkerCount() < required do
+        local remaining = (deadline - os.epoch("utc")) / 1000
+        if remaining <= 0 then return false end
+        local sender, msg = fleet.receive(cfg, remaining)
+        if sender and type(msg) == "table" then
+            if msg.kind == "worker_hello" or msg.kind == "worker_status" or msg.kind == "worker_progress" or msg.kind == "worker_done" or msg.kind == "worker_error" then
+                recordWorker(sender, msg)
+            end
+        end
+    end
+    return true
+end
+
 local function deployUntilRole(role)
     local existing = getWorkersByRole(role)
     if #existing > 0 then return existing[1] end
@@ -547,22 +697,108 @@ local function deployUntilRole(role)
         ". Pruefe: Worker-Config, startup.lua, Arbeitsgruppe, IDs und ob die gewuenschte Turtle in der Truhe liegt.")
 end
 
-local function deployAll()
-    local count = deployCount()
+local function formationForward()
+    calibrateCoordinator()
+    leaveInitChest()
+    local ok, err = pcall(function() nav.forwardDig() end)
+    if not ok then
+        error(shortage("formation_blocked", "Initialisierungs-Formation blockiert: Koordinator kann nicht vorfahren (" .. tostring(err) .. ")", {
+            pos = nav.getPos(),
+            facing = nav.getFacingName(),
+        }))
+    end
+end
 
-    local sides = deploySides()
-    local deployed = 0
-    for _, side in ipairs(sides) do
-        if deployed >= count then break end
-        if not detectTo(side) then
-            deployOne("Worker " .. (deployed + 1) .. "/" .. count, side)
-            deployed = deployed + 1
+local function ensureInitialized(required)
+    required = required or deployCount()
+    local alreadyOnline = onlineWorkerCount()
+    if alreadyOnline >= required then
+        state.formation.initialized = true
+        return true
+    end
+
+    local slots = plannedFormationSlots(required)
+    if #slots < required then
+        error(shortage("worker", "Init-Formation plant nur " .. tostring(#slots) .. "/" .. tostring(required) .. " Worker", {
+            required = required,
+            planned = #slots,
+        }))
+    end
+
+    calibrateCoordinator()
+    appendReport(state.currentReportId, "Initialisiere Worker-Formation", {
+        required = required,
+        online = alreadyOnline,
+        slots = slots,
+    })
+    if not cfg.initChest then
+        appendReport(state.currentReportId, "Keine initChest-Koordinate gesetzt; lade Worker und Treibstoff vor dem Vorfahren vor")
+        prefetchInitSupplies(required - alreadyOnline)
+    end
+
+    local placedOrOccupied = 0
+    local slotIndex = 1
+    for rowIndex, row in ipairs(initFormation()) do
+        for _, side in ipairs(row.sides or {}) do
+            if slotIndex > required then break end
+            local label = "Worker " .. tostring(slotIndex) .. "/" .. tostring(required) .. " (" .. tostring(side) .. ", Reihe " .. tostring(rowIndex) .. ")"
+            local occupied = false
+            if detectTo(side) then
+                local okInspect, data = inspectTo(side)
+                if okInspect and isTurtleBlock(data) then
+                    occupied = true
+                    appendReport(state.currentReportId, "Formation-Slot bereits belegt: " .. label, {
+                        side = side,
+                        row = rowIndex,
+                        block = data.name,
+                    })
+                else
+                    local name = okInspect and data and data.name or "unbekannt"
+                    error(shortage("formation_blocked", "Formation-Slot blockiert: " .. label .. " durch " .. tostring(name), {
+                        side = side,
+                        row = rowIndex,
+                        block = name,
+                    }))
+                end
+            end
+            if not occupied then deployOne(label, side) end
+            placedOrOccupied = placedOrOccupied + 1
+            state.formation.slots[slotIndex] = {
+                row = rowIndex,
+                side = side,
+                occupied = true,
+                label = label,
+                pos = nav.getPos(),
+                facing = nav.getFacingName(),
+            }
+            slotIndex = slotIndex + 1
         end
+        if row.moveForwardAfter then formationForward() end
+        if slotIndex > required then break end
     end
 
-    if deployed < count then
-        error("Nur " .. deployed .. "/" .. count .. " Worker deployt. Nicht genug freie deploySides.")
+    requestWorkerStatuses()
+    local okOnline = waitForOnlineWorkers(required, cfg.workerOnlineWait or cfg.deployWait or 12)
+    if not okOnline then
+        local text = "Nur " .. tostring(onlineWorkerCount()) .. "/" .. tostring(required) .. " Worker kamen online. Pruefe startup.lua, fleet_config.lua, Rolle, Modem, Gruppe und ob platzierte Turtles betankt sind."
+        error(shortage("worker", text, {
+            required = required,
+            online = onlineWorkerCount(),
+            formationSlots = state.formation.slots,
+        }))
     end
+
+    state.formation.initialized = true
+    appendReport(state.currentReportId, "Worker-Formation initialisiert", {
+        required = required,
+        online = onlineWorkerCount(),
+        placedOrOccupied = placedOrOccupied,
+    })
+    return true
+end
+
+local function deployAll()
+    return ensureInitialized(deployCount())
 end
 
 local function allWorkerList()
@@ -604,6 +840,9 @@ end
 
 local function coordinatorStatus()
     local used, free = fleet.slotSummary()
+    local planned = deployCount()
+    local online = onlineWorkerCount()
+    local missing = math.max(0, planned - online)
     return {
         id = cfg.id,
         group = cfg.group,
@@ -619,6 +858,14 @@ local function coordinatorStatus()
         chestSide = cfg.chestSide or "front",
         deploySide = cfg.deploySide or "right",
         deploySides = deploySides(),
+        initStatus = {
+            initialized = state.formation.initialized or online >= planned,
+            plannedWorkers = planned,
+            onlineWorkers = online,
+            missingWorkers = missing,
+            formationSlots = fleet.safeCopy(state.formation.slots),
+            fuelReserve = countFuelInInventory(),
+        },
         workers = allWorkerList(),
         needs = aggregateNeeds(),
     }
@@ -654,6 +901,7 @@ end
 
 local function goAdjacentTo(pos)
     calibrateCoordinator()
+    if leaveInitChest then leaveInitChest() end
     nav.setChest(pos)
     nav.goAdjacentToChest()
 end
@@ -669,6 +917,35 @@ end
 local function goToInitChest()
     assert(cfg.initChest, "cfg.initChest fehlt: Koordinator braucht Koordinaten der Init-Truhe fuer Nachversorgung")
     goAdjacentTo(cfg.initChest)
+    state.atInitChest = true
+    state.depotAccessSide = "front"
+end
+
+function leaveInitChest()
+    state.atInitChest = false
+    state.depotAccessSide = nil
+end
+
+local function saveNavPose()
+    return { pos = nav.getPos(), facing = nav.getFacingName() }
+end
+
+local function restoreNavPose(pose)
+    if not pose or not pose.pos then return end
+    calibrateCoordinator()
+    leaveInitChest()
+    nav.goTo(pose.pos)
+    if pose.facing then nav.turnTo(pose.facing) end
+end
+
+function withInitChest(fn)
+    local pose = nil
+    local canReturn = cfg.initChest ~= nil
+    if canReturn then pose = saveNavPose(); goToInitChest() else state.atInitChest = true; state.depotAccessSide = cfg.chestSide or "back" end
+    local ok, result = pcall(fn)
+    if canReturn then restoreNavPose(pose) else state.atInitChest = false; state.depotAccessSide = nil end
+    if not ok then error(result) end
+    return result
 end
 
 local function ensureFuelReserve()
@@ -709,10 +986,11 @@ local function pullItemsForward()
     return pulled
 end
 
-local function emptyItemsToJobChest()
-    assert(state.currentJobChest, "Keine Job-Truhe fuer aktuellen Auftrag gesetzt")
+local function emptyItemsToJobChest(jobChest, reportId)
+    jobChest = jobChest or state.currentJobChest
+    assert(jobChest, "Keine Job-Truhe fuer aktuellen Auftrag gesetzt")
     local reserved = reserveFuelSlots()
-    goAdjacentTo(state.currentJobChest)
+    goAdjacentTo(jobChest)
     local moved = 0
     for i = 1, 16 do
         if not reserved[i] and turtle.getItemCount(i) > 0 then
@@ -722,9 +1000,11 @@ local function emptyItemsToJobChest()
             if ok then
                 moved = moved + count
             else
-                local text = "Job-Truhe voll oder nicht erreichbar bei " .. vecString(state.currentJobChest)
-                chat(text)
-                appendReport(state.currentReportId, text)
+                local text = shortage("storage_full", "Job-Truhe voll oder nicht erreichbar bei " .. vecString(jobChest), {
+                    chest = jobChest,
+                    slot = i,
+                    count = count,
+                }, reportId)
                 error(text)
             end
         end
@@ -745,6 +1025,9 @@ local function enqueueService(sender, msg)
         facing = msg.facing,
         detail = msg.detail,
         items = msg.items,
+        job = msg.job,
+        jobKind = msg.jobKind or (msg.job and msg.job.kind),
+        jobChest = msg.jobChest or (msg.job and msg.job.chest) or state.currentJobChest,
         reportId = msg.request_id,
     }
     appendReport(msg.request_id, "Service-Anfrage von Arbeiter " .. tostring(msg.worker) .. ": " .. tostring(msg.reason), {
@@ -767,11 +1050,22 @@ end
 
 local function handleServiceRequest(req)
     assert(req and req.pos, "Service-Anfrage ohne Worker-Position")
-    ensureFuelReserve()
+    if not ensureFuelReserve() then
+        error(shortage("fuel", "Koordinator hat keine Treibstoffreserve fuer Servicefahrt", {
+            worker = req.worker,
+            reason = req.reason,
+        }, req.reportId))
+    end
     goAdjacentTo(req.pos)
 
     if req.reason == "fuel" then
         local dropped = dropFuelForward(cfg.workerFuelItems or 64)
+        if dropped <= 0 then
+            error(shortage("fuel", "Kein Treibstoff fuer Worker-Service verfuegbar", {
+                worker = req.worker,
+                pos = req.pos,
+            }, req.reportId))
+        end
         appendReport(req.reportId, "Arbeiter " .. tostring(req.worker) .. " erhielt " .. tostring(dropped) .. " Treibstoff-Items", {
             worker = req.worker,
             pos = req.pos,
@@ -785,10 +1079,10 @@ local function handleServiceRequest(req)
             items = req.items,
             count = pulled,
         })
-        local moved = emptyItemsToJobChest()
-        appendReport(req.reportId, "Items von Arbeiter " .. tostring(req.worker) .. " zu Lager " .. vecString(state.currentJobChest) .. " gebracht: " .. tostring(moved), {
+        local moved = emptyItemsToJobChest(req.jobChest, req.reportId)
+        appendReport(req.reportId, "Items von Arbeiter " .. tostring(req.worker) .. " zu Lager " .. vecString(req.jobChest) .. " gebracht: " .. tostring(moved), {
             worker = req.worker,
-            chest = state.currentJobChest,
+            chest = req.jobChest,
             count = moved,
         })
     else
@@ -856,12 +1150,15 @@ local function dispatchRole(role, job, requestId)
     return worker
 end
 
-local function makeLayerJobs(job)
+local function makeLayerJobs(job, highestY)
     local area = fleet.normalizeArea(job.p1, job.p2)
     local layers = {}
-    for y = area.maxY, area.minY, -1 do
+    local startY = highestY or area.maxY
+    if startY > area.maxY then startY = area.maxY end
+    if startY < area.minY then return layers end
+    for y = startY, area.minY, -1 do
         layers[#layers + 1] = {
-            kind = job.kind,
+            kind = "abbau",
             chest = job.chest,
             p1 = { x = area.minX, y = y, z = area.minZ },
             p2 = { x = area.maxX, y = y, z = area.maxZ },
@@ -897,13 +1194,18 @@ local function dispatchLayerJobs(requestId)
     end
 end
 
-local function startLayeredAbbau(requestId, job)
+local function startLayeredAbbau(requestId, job, discoveredHighest)
     local role = cfg.abbauRole or "bergbau"
     if #getWorkersByRole(role) == 0 and cfg.autoDeploy ~= false then
         deployUntilRole(role)
     end
 
-    local layers = makeLayerJobs(job)
+    if not discoveredHighest then
+        finishReport(requestId, "empty", "Im Abbaubereich wurden keine Bloecke gefunden")
+        return "empty"
+    end
+
+    local layers = makeLayerJobs(job, discoveredHighest.y)
     state.activeJobs[requestId] = {
         kind = "abbau",
         role = role,
@@ -911,11 +1213,43 @@ local function startLayeredAbbau(requestId, job)
         nextLayer = 1,
         running = 0,
     }
-    appendReport(requestId, "Abbau in " .. tostring(#layers) .. " Y-Schichten zerlegt", { layers = layers })
+    appendReport(requestId, "Abbau ab gefundenem Hoechstpunkt Y=" .. tostring(discoveredHighest.y) .. " in " .. tostring(#layers) .. " Y-Schichten zerlegt", {
+        discoveredHighest = discoveredHighest,
+        layers = layers,
+    })
+    if #layers == 0 then
+        finishReport(requestId, "empty", "Keine Schichten im Abbaubereich zu starten", { discoveredHighest = discoveredHighest })
+        return "empty"
+    end
     dispatchLayerJobs(requestId)
     if state.activeJobs[requestId].running == 0 then
         error("Kein freier Worker fuer Schicht-Abbau verfuegbar")
     end
+end
+
+local function startAbbauPrepare(requestId, job)
+    local role = cfg.abbauRole or "bergbau"
+    local prepareJob = {
+        kind = "abbau_prepare",
+        chest = job.chest,
+        p1 = job.p1,
+        p2 = job.p2,
+    }
+    local worker = dispatchRole(role, prepareJob, requestId)
+    state.activeJobs[requestId] = {
+        kind = "abbau_prepare",
+        role = role,
+        originalJob = fleet.safeCopy(job),
+        prepareWorker = worker.id,
+        running = 1,
+        layers = {},
+        nextLayer = 1,
+    }
+    appendReport(requestId, "Etappe 1 gestartet: Abbau-Vorbereitung", {
+        worker = worker.id,
+        job = prepareJob,
+    })
+    return worker
 end
 
 local function handlePocket(sender, msg)
@@ -974,12 +1308,13 @@ local function handlePocket(sender, msg)
         }
         startReport(msg.request_id, "abbau", job)
         local ok, resultOrErr = pcall(function()
-            return startLayeredAbbau(msg.request_id, job)
+            ensureInitialized(deployCount())
+            return startAbbauPrepare(msg.request_id, job)
         end)
         if ok then
-            chat("Abbauauftrag in Y-Schichten gestartet")
+            chat("Abbauauftrag vorbereitet: Etappe 1 gestartet")
             reply(sender, msg.request_id, "coordinator_ok", {
-                message = "Abbauauftrag in Y-Schichten gestartet",
+                message = "Abbauauftrag gestartet: Vorbereitung laeuft",
                 reportId = msg.request_id,
             })
         else
@@ -1056,8 +1391,26 @@ local function listenLoop()
                     if msg.kind == "worker_done" then
                         local active = state.activeJobs[msg.request_id]
                         if active then
-                            active.running = math.max(0, active.running - 1)
                             if workers[msg.worker] then markWorkerBusy(workers[msg.worker], false) end
+                            if active.kind == "abbau_prepare" then
+                                active.running = math.max(0, active.running - 1)
+                                local result = msg.result or {}
+                                local highest = result.discoveredHighest
+                                appendReport(msg.request_id, "Etappe 1 abgeschlossen", {
+                                    worker = msg.worker,
+                                    result = result,
+                                    discoveredHighest = highest,
+                                })
+                                if not highest then
+                                    state.activeJobs[msg.request_id] = nil
+                                    finishReport(msg.request_id, "empty", "Abbaubereich ist leer", { result = result })
+                                else
+                                    state.activeJobs[msg.request_id] = nil
+                                    startLayeredAbbau(msg.request_id, active.originalJob, highest)
+                                end
+                                return
+                            end
+                            active.running = math.max(0, active.running - 1)
                             appendReport(msg.request_id, "Arbeiter " .. tostring(msg.worker) .. " meldet Schicht fertig", {
                                 worker = msg.worker,
                                 status = msg.status,
