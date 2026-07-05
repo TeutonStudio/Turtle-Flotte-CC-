@@ -68,14 +68,28 @@ function M.professionFromUpgrade(upgradeName)
     return "unbekannt"
 end
 
-function M.detectProfession()
+function M.detectProfession(cfg)
+    cfg = cfg or {}
     local side, tool, warnings = M.findToolSide()
     if not tool then
+        local fallback = cfg.profession or cfg.workerRole
+        if fallback and fallback ~= "" then
+            local outWarnings = warnings and #warnings > 0 and warnings or {}
+            outWarnings[#outWarnings + 1] = "Beruf aus Config-Fallback: " .. tostring(fallback)
+            return {
+                profession = fallback,
+                toolSide = side,
+                tool = nil,
+                warnings = outWarnings,
+                source = "config_fallback",
+            }
+        end
         return {
             profession = "unbekannt",
             toolSide = side,
             tool = nil,
             warnings = warnings and #warnings > 0 and warnings or warning("Kein Werkzeug-/Funktions-Upgrade erkannt"),
+            source = "unknown",
         }
     end
     return {
@@ -83,6 +97,7 @@ function M.detectProfession()
         toolSide = side,
         tool = tool,
         warnings = warnings or {},
+        source = "equipped_api",
     }
 end
 

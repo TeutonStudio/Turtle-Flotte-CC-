@@ -30,12 +30,29 @@ local function openRednet()
     assert(opened, "Kein Modem gefunden")
 end
 
-local function inspectActionTarget(pos)
+local function inspectActionTarget(pos, toolSide)
     local pose = nav2.getPose()
     if not pose.pos then return nil end
-    if pose.pos.y + 1 == pos.y and pose.pos.x == pos.x and pose.pos.z == pos.z then return turtle.inspectUp, turtle.digUp end
-    if pose.pos.y - 1 == pos.y and pose.pos.x == pos.x and pose.pos.z == pos.z then return turtle.inspectDown, turtle.digDown end
-    return turtle.inspect, turtle.dig
+    if pose.pos.y + 1 == pos.y and pose.pos.x == pos.x and pose.pos.z == pos.z then
+        return turtle.inspectUp, function() return turtle.digUp(toolSide) end
+    end
+    if pose.pos.y - 1 == pos.y and pose.pos.x == pos.x and pose.pos.z == pos.z then
+        return turtle.inspectDown, function() return turtle.digDown(toolSide) end
+    end
+    return turtle.inspect, function() return turtle.dig(toolSide) end
+end
+
+local function shortVec(v)
+    if not v then return "?" end
+    return tostring(v.x) .. "," .. tostring(v.y) .. "," .. tostring(v.z)
+end
+
+local function taskLine(task)
+    if not task then return "-" end
+    local payload = task.payload or {}
+    local target = payload.wohin or payload.target
+    local action = payload.aktion == true and " action" or ""
+    return tostring(task.status) .. " " .. tostring(task.kind) .. action .. " -> " .. shortVec(target)
 end
 
 function M.run()
@@ -43,10 +60,12 @@ function M.run()
     openRednet()
 
     local eq = equipment.getEquipped()
-    local prof = equipment.detectProfession()
+    local prof = equipment.detectProfession(cfg)
     local state = {
         cfg = cfg,
         profession = prof.profession,
+        professionSource = prof.source,
+        toolSide = prof.toolSide,
         equipment = eq,
         warnings = prof.warnings or {},
         queue = taskQueue.new(),
@@ -54,21 +73,33 @@ function M.run()
         coordinatorRednetId = nil,
         lastError = nil,
         running = true,
+        navReady = false,
+        navError = nil,
     }
 
-    pcall(function() nav2.calibrate(cfg.start, cfg.facing) end)
+    local navOk, navErr = pcall(function()
+        local ok, err = nav2.calibrate(cfg.start, cfg.facing)
+        if ok == false then error(err or "calibration_failed") end
+    end)
+    state.navReady = navOk
+    state.navError = navOk and nil or tostring(navErr)
+    if not state.toolSide then state.warnings[#state.warnings + 1] = "Keine Werkzeugseite erkannt; dig-Fallback ohne sichere Upgrade-Seite" end
 
     local function status()
         local pose = nav2.getPose()
         return {
             id = cfg.id,
             profession = state.profession,
+            professionSource = state.professionSource,
+            toolSide = state.toolSide,
             fuel = turtle.getFuelLevel(),
             freeSlots = inventory.freeSlots(),
             pos = pose.pos,
             facing = pose.facing,
             equipment = state.equipment,
             warnings = state.warnings,
+            navReady = state.navReady,
+            navError = state.navError,
             currentTask = state.currentTask,
             queuedTasks = #taskQueue.list(state.queue, "pending"),
             lastError = state.lastError,
@@ -89,6 +120,7 @@ function M.run()
             id = cfg.id,
             worker = cfg.id,
             profession = state.profession,
+            professionSource = state.professionSource,
             status = status(),
         })
     end
@@ -140,16 +172,23 @@ function M.run()
             failTask(task, "wrong_profession", { required = payload.requiredProfession, actual = state.profession })
             return
         end
+        if not state.navReady then failTask(task, "nav_not_calibrated", { error = state.navError }); return end
         local ok, reason = ensureOperational(task)
-        if not ok then failTask(task, reason); return end
+        if not ok then
+            taskQueue.markPending(state.queue, task.id, reason)
+            return
+        end
 
         local result
         if payload.aktion then
             result = nav2.goAdjacentTo(target, { dig = false, requireSupport = payload.requireSupport == true })
-            if not result.ok then blocked(task, result); return end
+            if not result.ok then
+                if result.reason == "fuel" then sendToCoordinator({ kind = "worker_need_fuel", taskId = task.id, worker = cfg.id, pos = nav2.getPose().pos, fuel = turtle.getFuelLevel(), status = status() }); taskQueue.markPending(state.queue, task.id, "fuel"); return end
+                blocked(task, result); return
+            end
             local faced = nav2.face(target)
             if not faced then failTask(task, "target_not_adjacent", { target = target }); return end
-            local inspectFn, digFn = inspectActionTarget(target)
+            local inspectFn, digFn = inspectActionTarget(target, state.toolSide)
             local hasBlock, block = inspectFn()
             if not hasBlock then
                 taskQueue.markDone(state.queue, task.id, { empty = true, target = vec3.copy(target) })
@@ -165,10 +204,36 @@ function M.run()
             sendToCoordinator({ kind = "worker_task_done", taskId = task.id, worker = cfg.id, result = { dug = true, target = target, block = block }, status = status() })
         else
             result = nav2.goTo(target, { dig = false, requireSupport = payload.requireSupport == true })
-            if not result.ok then blocked(task, result); return end
+            if not result.ok then
+                if result.reason == "fuel" then sendToCoordinator({ kind = "worker_need_fuel", taskId = task.id, worker = cfg.id, pos = nav2.getPose().pos, fuel = turtle.getFuelLevel(), status = status() }); taskQueue.markPending(state.queue, task.id, "fuel"); return end
+                blocked(task, result); return
+            end
             taskQueue.markDone(state.queue, task.id, { pos = nav2.getPose().pos })
             sendToCoordinator({ kind = "worker_task_done", taskId = task.id, worker = cfg.id, result = { pos = nav2.getPose().pos }, status = status() })
         end
+    end
+
+    local function runInspectBlock(task)
+        local payload = task.payload or {}
+        local target = payload.target
+        assert(target, "inspect_block ohne target")
+        if not state.navReady then failTask(task, "nav_not_calibrated", { error = state.navError }); return end
+        local ok, reason = ensureOperational(task)
+        if not ok then taskQueue.markPending(state.queue, task.id, reason); return end
+        local result = nav2.goAdjacentTo(target, { dig = false, requireSupport = payload.requireSupport == true })
+        if not result.ok then
+            if result.reason == "fuel" then sendToCoordinator({ kind = "worker_need_fuel", taskId = task.id, worker = cfg.id, pos = nav2.getPose().pos, fuel = turtle.getFuelLevel(), status = status() }); taskQueue.markPending(state.queue, task.id, "fuel"); return end
+            blocked(task, result); return
+        end
+        local faced = nav2.face(target)
+        if not faced then failTask(task, "target_not_adjacent", { target = target }); return end
+        local inspectFn = inspectActionTarget(target, state.toolSide)
+        local hasBlock, block = inspectFn()
+        local scanResult
+        if hasBlock then scanResult = { hasBlock = true, block = block, target = target }
+        else scanResult = { hasBlock = false, empty = true, target = target } end
+        taskQueue.markDone(state.queue, task.id, scanResult)
+        sendToCoordinator({ kind = "worker_task_done", taskId = task.id, worker = cfg.id, result = scanResult, status = status() })
     end
 
     local function runTask(task)
@@ -177,6 +242,8 @@ function M.run()
         local ok, err = pcall(function()
             if task.kind == "move_action" then
                 runMoveAction(task)
+            elseif task.kind == "inspect_block" or task.kind == "scan_block" then
+                runInspectBlock(task)
             else
                 failTask(task, "unknown_task_kind", { kind = task.kind })
             end
@@ -193,7 +260,7 @@ function M.run()
             if sender and type(msg) == "table" then
                 if msg.kind == "coordinator_hello" then
                     state.coordinatorRednetId = sender
-                elseif msg.kind == "worker_status" then
+                elseif msg.kind == "worker_status_request" then
                     sendToCoordinator({ kind = "worker_status", worker = cfg.id, status = status() })
                 elseif msg.kind == "worker_task" and (not msg.worker or msg.worker == cfg.id) then
                     state.coordinatorRednetId = sender
@@ -226,7 +293,43 @@ function M.run()
         while state.running do hello(); sleep(cfg.statusInterval or 5) end
     end
 
-    parallel.waitForAny(listenLoop, taskLoop, heartbeatLoop)
+    local function displayLoop()
+        while state.running do
+            if term and term.clear then
+                local _, h = term.getSize()
+                term.clear()
+                term.setCursorPos(1, 1)
+                print("Worker " .. tostring(cfg.id))
+                print("Beruf: " .. tostring(state.profession) .. " (" .. tostring(state.professionSource) .. ") Tool=" .. tostring(state.toolSide))
+                print("Nav: " .. tostring(state.navReady) .. (state.navError and (" | " .. tostring(state.navError)) or ""))
+                print("Fuel: " .. tostring(turtle.getFuelLevel()) .. " Frei: " .. tostring(inventory.freeSlots()) .. "/16")
+                local pose = nav2.getPose()
+                print("Pos: " .. shortVec(pose.pos) .. " Facing: " .. tostring(pose.facing))
+                print("Aktuell: " .. taskLine(state.currentTask))
+                print("Naechste:")
+                local line = 8
+                for _, task in ipairs(taskQueue.list(state.queue)) do
+                    if line >= h then break end
+                    if task ~= state.currentTask and (task.status == "pending" or task.status == "running") then
+                        print("  " .. taskLine(task))
+                        line = line + 1
+                    end
+                end
+                if #state.warnings > 0 and line < h then
+                    print("Warnungen:")
+                    line = line + 1
+                    for _, warning in ipairs(state.warnings) do
+                        if line >= h then break end
+                        print("  " .. tostring(warning))
+                        line = line + 1
+                    end
+                end
+            end
+            sleep(1)
+        end
+    end
+
+    parallel.waitForAny(listenLoop, taskLoop, heartbeatLoop, displayLoop)
 end
 
 return M

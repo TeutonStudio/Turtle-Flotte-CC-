@@ -4,20 +4,26 @@
 local vec3 = require("vec3")
 local M = {}
 
-local knownSupport = {}
-
-function M.hasSupportBelow(pos)
-    local key = vec3.key(vec3.new(pos.x, pos.y - 1, pos.z))
-    if knownSupport[key] ~= nil then return knownSupport[key] end
+function M.hasSupportBelowCurrent()
     if turtle and turtle.inspectDown then
         local ok = turtle.inspectDown()
         return ok
     end
-    return false
+    return nil
 end
 
-function M.safeToStand(pos)
-    return M.hasSupportBelow(pos)
+function M.hasKnownSupportBelow(pos, knownTerrain)
+    if not pos or not knownTerrain or not knownTerrain.support then return nil end
+    local key = vec3.key(vec3.new(pos.x, pos.y - 1, pos.z))
+    return knownTerrain.support[key]
+end
+
+function M.hasSupportBelow(pos)
+    return M.hasKnownSupportBelow(pos) == true
+end
+
+function M.safeToStand(pos, knownTerrain)
+    return M.hasKnownSupportBelow(pos, knownTerrain) == true
 end
 
 function M.safeOuterRing(area, y, knownTerrain)
@@ -36,17 +42,15 @@ function M.safeOuterRing(area, y, knownTerrain)
         local key = vec3.key(below)
         if knownTerrain and knownTerrain.support and knownTerrain.support[key] == true then
             safe[#safe + 1] = p
-        elseif M.safeToStand(p) then
-            safe[#safe + 1] = p
         end
     end
     return safe
 end
 
-function M.filterNoFallPositions(positions)
+function M.filterNoFallPositions(positions, knownTerrain)
     local safe = {}
     for _, p in ipairs(positions or {}) do
-        if M.safeToStand(p) then safe[#safe + 1] = p end
+        if M.safeToStand(p, knownTerrain) then safe[#safe + 1] = p end
     end
     return safe
 end

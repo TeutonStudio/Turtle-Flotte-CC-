@@ -17,7 +17,12 @@ rednet.host(cfg.protocol, cfg.id)
 
 local brain = brainLib.new(cfg)
 
-pcall(function() nav2.calibrate(cfg.start, cfg.facing) end)
+local navOk, navErr = pcall(function()
+    local ok, err = nav2.calibrate(cfg.start, cfg.facing)
+    if ok == false then error(err or "calibration_failed") end
+end)
+brain.coordinatorNav.ready = navOk
+brain.coordinatorNav.error = navOk and nil or tostring(navErr)
 
 local function reply(to, requestId, kind, extra)
     extra = extra or {}
@@ -41,6 +46,8 @@ local function handlePocket(sender, msg)
             p2 = msg.p2,
             from = msg.from,
         })
+        local tickOk, tickErr = pcall(function() brain:tick() end)
+        if not tickOk then brain:warn("pocket_tick", "Brain-Tick nach Pocket-Befehl fehlgeschlagen: " .. tostring(tickErr)) end
         reply(sender, msg.request_id, "coordinator_report", { message = "Abbau-Befehl eingereiht", status = brain:statusSnapshot() })
     elseif msg.command == "stop" then
         brain:addPocketCommand({ request_id = msg.request_id, command = "stop" })
@@ -51,6 +58,19 @@ local function handlePocket(sender, msg)
     else
         reply(sender, msg.request_id, "coordinator_report", { error = "Unbekannter Befehl: " .. tostring(msg.command), status = brain:statusSnapshot() })
     end
+end
+
+local function shortVec(v)
+    if not v then return "?" end
+    return tostring(v.x) .. "," .. tostring(v.y) .. "," .. tostring(v.z)
+end
+
+local function taskLine(task)
+    if not task then return "-" end
+    local payload = task.payload or {}
+    local target = payload.wohin or payload.target or payload.pos
+    local worker = task.worker and (" @" .. tostring(task.worker)) or ""
+    return tostring(task.status) .. " " .. tostring(task.kind) .. worker .. " -> " .. shortVec(target)
 end
 
 local function dropFuelForward(wanted)
@@ -68,6 +88,28 @@ local function dropFuelForward(wanted)
     return dropped
 end
 
+local function returnNonFuelForward()
+    for slot = 1, 16 do
+        local detail = turtle.getItemDetail(slot)
+        if detail and not inventory.isFuel(slot) then
+            turtle.select(slot)
+            turtle.drop()
+        end
+    end
+    turtle.select(1)
+end
+
+local function suckFuelFromFront(wanted)
+    wanted = wanted or 16
+    local before = inventory.countFuelItems()
+    for _ = 1, 64 do
+        if inventory.countFuelItems() - before >= wanted then break end
+        if not turtle.suck(1) then break end
+        returnNonFuelForward()
+    end
+    return inventory.countFuelItems() - before
+end
+
 local function currentLager()
     local snap = brain:statusSnapshot()
     return snap.currentCommand and snap.currentCommand.payload and snap.currentCommand.payload.chest or cfg.initChest
@@ -78,7 +120,7 @@ local function serviceFuel(msg)
     if cfg.initChest then
         local r = nav2.goAdjacentTo(cfg.initChest, { dig = false })
         if not r.ok then return false, r.reason end
-        inventory.suckAllPossible("front", 16)
+        suckFuelFromFront(cfg.workerFuelItems or 16)
     end
     local r = nav2.goAdjacentTo(msg.pos, { dig = false })
     if not r.ok then return false, r.reason end
@@ -99,14 +141,6 @@ local function serviceUnload(msg)
     return true
 end
 
-local function tryService(kind, msg)
-    local ok, err
-    if kind == "fuel" then ok, err = serviceFuel(msg)
-    elseif kind == "unload" then ok, err = serviceUnload(msg)
-    else return end
-    if not ok then print("[Koordinator] Service " .. kind .. " fehlgeschlagen: " .. tostring(err)) end
-end
-
 local function listenLoop()
     while true do
         local sender, msg = protocol.receive(cfg, 0.5)
@@ -115,11 +149,34 @@ local function listenLoop()
             elseif msg.kind == "worker_status" then brain:handleWorkerStatus(sender, msg)
             elseif msg.kind == "worker_task_done" then brain:handleWorkerDone(msg)
             elseif msg.kind == "worker_task_failed" then brain:handleWorkerFailed(msg)
+            elseif msg.kind == "worker_task_accepted" then brain:handleWorkerAccepted(msg)
             elseif msg.kind == "worker_blocked" then brain:handleWorkerBlocked(msg)
-            elseif msg.kind == "worker_need_fuel" then brain:handleWorkerNeedsFuel(msg); tryService("fuel", msg)
-            elseif msg.kind == "worker_inventory_full" then brain:handleWorkerInventoryFull(msg); tryService("unload", msg)
+            elseif msg.kind == "worker_need_fuel" then brain:handleWorkerNeedsFuel(msg)
+            elseif msg.kind == "worker_inventory_full" then brain:handleWorkerInventoryFull(msg)
             elseif msg.kind == "pocket_command" then handlePocket(sender, msg)
             end
+        end
+    end
+end
+
+local function serviceLoop()
+    while true do
+        local task = brain:claimServiceTask()
+        if task then
+            local ok, err = pcall(function()
+                if task.kind == "service_fuel" then
+                    local done, why = serviceFuel({ worker = task.payload.workerId, pos = task.payload.pos })
+                    if not done then error(why) end
+                    return true
+                elseif task.kind == "service_unload" then
+                    local done, why = serviceUnload({ worker = task.payload.workerId, pos = task.payload.pos })
+                    if not done then error(why) end
+                    return true
+                end
+            end)
+            brain:completeServiceTask(task.id, ok, ok and { ok = true } or tostring(err))
+        else
+            sleep(0.2)
         end
     end
 end
@@ -139,4 +196,53 @@ local function brainLoop()
     end
 end
 
-parallel.waitForAny(listenLoop, heartbeatLoop, brainLoop)
+local function displayLoop()
+    while true do
+        if term and term.clear then
+            local _, h = term.getSize()
+            local status = brain:statusSnapshot()
+            term.clear()
+            term.setCursorPos(1, 1)
+            print("Koordinator " .. tostring(status.id) .. " | " .. tostring(status.status))
+            print("Nav: " .. tostring(status.navReady) .. (status.navError and (" | " .. tostring(status.navError)) or ""))
+            if status.currentCommand then
+                print("Aktuell: " .. tostring(status.currentCommand.kind) .. " " .. tostring(status.currentCommand.id))
+            else
+                print("Aktuell: -")
+            end
+            print("Report: " .. tostring(status.currentReport or "-"))
+            local line = 5
+            if status.warnings and #status.warnings > 0 and line < h then
+                print("Warnung: " .. tostring(status.warnings[#status.warnings].text))
+                line = line + 1
+            end
+            print("Commands:")
+            line = line + 1
+            for _, task in ipairs(status.commandQueue or {}) do
+                if line >= h then break end
+                if task.status == "pending" or task.status == "running" then
+                    print("  " .. tostring(task.status) .. " " .. tostring(task.kind) .. " " .. tostring(task.id))
+                    line = line + 1
+                end
+            end
+            if line < h then print("Subtasks:"); line = line + 1 end
+            for _, task in ipairs(status.subtaskQueue or {}) do
+                if line >= h then break end
+                if task.status == "pending" or task.status == "running" or task.status == "held" then
+                    print("  " .. taskLine(task))
+                    line = line + 1
+                end
+            end
+            if line < h then print("Worker:"); line = line + 1 end
+            for _, worker in ipairs(status.workers or {}) do
+                if line >= h then break end
+                local s = worker.status or {}
+                print("  " .. tostring(worker.id) .. " " .. tostring(worker.profession) .. " " .. shortVec(s.pos) .. " " .. tostring(worker.currentTask and "busy" or "frei"))
+                line = line + 1
+            end
+        end
+        sleep(1)
+    end
+end
+
+parallel.waitForAny(listenLoop, heartbeatLoop, brainLoop, serviceLoop, displayLoop)

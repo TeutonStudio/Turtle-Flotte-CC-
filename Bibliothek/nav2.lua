@@ -25,12 +25,8 @@ local function forwardPos()
 end
 
 local function supportKnown(pos)
-    return state.knownSupport[vec3.key(pos)] == true
-end
-
-local function inspectSupportBelow()
-    local ok = turtle.inspectDown()
-    return ok
+    local below = vec3.new(pos.x, pos.y - 1, pos.z)
+    return state.knownSupport[vec3.key(below)]
 end
 
 local function avoidContains(avoid, pos)
@@ -72,6 +68,10 @@ function M.setPose(pos, facing)
     state.facing = direction.fromName(facing)
 end
 
+function M.setKnownSupport(support)
+    state.knownSupport = support or {}
+end
+
 function M.turnTo(target)
     local to = direction.fromName(target)
     assert(to ~= nil, "Ungueltige Richtung")
@@ -94,8 +94,13 @@ function M.stepForward(options)
     if avoidContains(options.avoid, nextPos) then
         return { ok = false, reason = "blocked", pos = vec3.copy(state.pos), blockedPos = nextPos, block = { name = "avoid" } }
     end
-    if options.requireSupport and not supportKnown(nextPos) and not inspectSupportBelow() then
-        return { ok = false, reason = "unsafe_no_support", pos = vec3.copy(state.pos), blockedPos = nextPos }
+    if options.requireSupport then
+        local support = supportKnown(nextPos)
+        if support == nil then
+            return { ok = false, reason = "support_unknown", pos = vec3.copy(state.pos), blockedPos = nextPos }
+        elseif support == false then
+            return { ok = false, reason = "unsafe_no_support", pos = vec3.copy(state.pos), blockedPos = nextPos }
+        end
     end
     local ok, reason = turtle.forward()
     if ok then

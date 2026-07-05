@@ -79,8 +79,15 @@ local function printStatus(status)
     print("Koordinator: " .. tostring(status.id))
     print("Gruppe: " .. tostring(status.group))
     print("Status: " .. tostring(status.status))
+    print("Nav: " .. tostring(status.navReady) .. (status.navError and (" | " .. tostring(status.navError)) or ""))
     if status.currentCommand then print("Aktueller Befehl: " .. tostring(status.currentCommand.kind) .. " | " .. tostring(status.currentCommand.id)) end
     if status.currentReport then print("Aktueller Report: " .. tostring(status.currentReport)) end
+    if status.warnings and #status.warnings > 0 then
+        print("Warnungen:")
+        for _, warning in ipairs(status.warnings) do
+            print("  - " .. tostring(warning.text))
+        end
+    end
     printQueue("CommandQueue", status.commandQueue)
     printQueue("SubtaskQueue", status.subtaskQueue)
     print("Worker:")
@@ -88,13 +95,18 @@ local function printStatus(status)
         local s = w.status or {}
         local eq = s.equipment or {}
         local line = "- " .. tostring(w.id) .. " [" .. tostring(w.profession) .. "]"
+        line = line .. " | Quelle " .. tostring(s.professionSource or w.professionSource)
+        line = line .. " | Tool " .. tostring(s.toolSide)
         line = line .. " | Fuel " .. tostring(s.fuel)
         line = line .. " | frei " .. tostring(s.freeSlots)
         line = line .. " | Pos " .. vecString(s.pos)
         line = line .. " | Facing " .. tostring(s.facing)
+        line = line .. " | Nav " .. tostring(s.navReady)
         line = line .. " | Task " .. tostring(w.currentTask and w.currentTask.id or "frei")
         print(line)
         print("    Equipment L=" .. tostring(eq.left and eq.left.name) .. " R=" .. tostring(eq.right and eq.right.name))
+        for _, warn in ipairs(s.warnings or {}) do print("    Warnung: " .. tostring(warn)) end
+        if s.navError then print("    Nav-Fehler: " .. tostring(s.navError)) end
     end
 end
 

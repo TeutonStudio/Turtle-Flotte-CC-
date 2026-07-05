@@ -19,6 +19,10 @@ local function find(q, id)
     return nil
 end
 
+function M.get(q, id)
+    return find(q, id)
+end
+
 function M.new()
     return { tasks = {} }
 end
@@ -32,20 +36,34 @@ function M.push(q, task)
     return task
 end
 
-function M.pop(q)
+function M.firstPending(q)
     for _, task in ipairs(q.tasks) do
         if task.status == "pending" then return task end
     end
     return nil
 end
 
+function M.pop(q)
+    return M.firstPending(q)
+end
+
 function M.peek(q)
-    return M.pop(q)
+    return M.firstPending(q)
 end
 
 function M.markRunning(q, id)
     local task = find(q, id)
     if task then task.status = "running"; task.startedAt = task.startedAt or now() end
+    return task
+end
+
+function M.markPending(q, id, errorText)
+    local task = find(q, id)
+    if task then
+        task.status = "pending"
+        task.startedAt = nil
+        task.error = errorText
+    end
     return task
 end
 
@@ -70,7 +88,25 @@ function M.list(q, status)
 end
 
 function M.isEmpty(q)
-    return M.pop(q) == nil
+    return M.firstPending(q) == nil
+end
+
+function M.hasPending(q)
+    return M.firstPending(q) ~= nil
+end
+
+function M.hasRunning(q)
+    for _, task in ipairs(q.tasks) do
+        if task.status == "running" then return true end
+    end
+    return false
+end
+
+function M.hasOpen(q)
+    for _, task in ipairs(q.tasks) do
+        if task.status == "pending" or task.status == "running" then return true end
+    end
+    return false
 end
 
 return M

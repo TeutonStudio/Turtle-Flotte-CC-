@@ -48,7 +48,31 @@ function M.new(cfg)
     self.currentReport = nil
     self.status = "bereit"
     self.standbyPlanned = false
+    self.warnings = {}
+    self.warningTimes = {}
+    self.coordinatorNav = { ready = nil, error = nil }
     return self
+end
+
+function Brain:knownWorkerSummary()
+    local list = {}
+    for _, w in pairs(self.workers) do
+        local s = w.status or {}
+        list[#list + 1] = tostring(w.id) .. "/" .. tostring(w.profession or s.profession) .. "/" .. tostring(w.currentTask and "busy" or "frei")
+    end
+    table.sort(list)
+    return table.concat(list, ", ")
+end
+
+function Brain:warn(key, text, detail, intervalMs)
+    local t = now()
+    intervalMs = intervalMs or 5000
+    if self.warningTimes[key] and t - self.warningTimes[key] < intervalMs then return end
+    self.warningTimes[key] = t
+    local item = { at = t, text = text, detail = detail }
+    self.warnings[#self.warnings + 1] = item
+    while #self.warnings > 20 do table.remove(self.warnings, 1) end
+    if self.currentReport then reportLib.event(self.currentReport, "warning", item) end
 end
 
 function Brain:addPocketCommand(command)
@@ -67,9 +91,21 @@ function Brain:handleWorkerHello(sender, msg)
     local w = self.workers[id]
     w.rednetId = sender
     w.profession = msg.profession or (msg.status and msg.status.profession) or w.profession or "unbekannt"
+    w.professionSource = msg.professionSource or (msg.status and msg.status.professionSource) or w.professionSource
     w.status = msg.status or w.status
     w.lastSeen = now()
     w.currentTask = w.status and w.status.currentTask or w.currentTask
+end
+
+function Brain:handleWorkerAccepted(msg)
+    local worker = self.workers[msg.worker]
+    if worker then worker.status = msg.status or worker.status end
+    local task = taskQueue.get(self.subtaskQueue, msg.taskId)
+    if task then
+        task.acceptedAt = now()
+        task.accepted = true
+    end
+    if self.currentReport then reportLib.event(self.currentReport, "worker_task_accepted", msg) end
 end
 
 function Brain:handleWorkerStatus(sender, msg)
@@ -84,12 +120,12 @@ function Brain:handleWorkerDone(msg)
     for _, task in ipairs(taskQueue.list(self.subtaskQueue)) do
         if task.id == msg.taskId then doneTask = task; break end
     end
-    local target = doneTask and doneTask.payload and doneTask.payload.wohin
+    local target = doneTask and doneTask.payload and (doneTask.payload.wohin or doneTask.payload.target)
     if target and msg.result and msg.result.block then terrain.markBlock(self.terrain, target, msg.result.block) end
     if target and msg.result and msg.result.empty then terrain.markAir(self.terrain, target) end
     if self.currentReport then
         reportLib.event(self.currentReport, "worker_task_done", { worker = msg.worker, taskId = msg.taskId, result = msg.result })
-        if msg.result and msg.result.block then reportLib.addItemsGained(self.currentReport, { [msg.result.block.name or "unknown"] = 1 }) end
+        if msg.result and msg.result.dug and msg.result.block then reportLib.addItemsGained(self.currentReport, { [msg.result.block.name or "unknown"] = 1 }) end
     end
 end
 
@@ -119,6 +155,9 @@ function Brain:handleWorkerBlocked(msg)
 end
 
 function Brain:handleWorkerNeedsFuel(msg)
+    if msg.taskId then taskQueue.markPending(self.subtaskQueue, msg.taskId, "fuel_needed") end
+    local worker = self.workers[msg.worker]
+    if worker then worker.currentTask = nil; worker.status = msg.status or worker.status end
     if self.currentReport then reportLib.event(self.currentReport, "worker_need_fuel", msg) end
     local task = self:planServiceFuel(msg.worker, msg.pos)
     task.priority = 0
@@ -126,6 +165,9 @@ function Brain:handleWorkerNeedsFuel(msg)
 end
 
 function Brain:handleWorkerInventoryFull(msg)
+    if msg.taskId then taskQueue.markPending(self.subtaskQueue, msg.taskId, "inventory_full") end
+    local worker = self.workers[msg.worker]
+    if worker then worker.currentTask = nil; worker.status = msg.status or worker.status end
     if self.currentReport then reportLib.event(self.currentReport, "worker_inventory_full", msg) end
     local lager = self.currentCommand and self.currentCommand.payload and self.currentCommand.payload.chest
     local task = self:planServiceUnload(msg.worker, msg.pos, lager)
@@ -137,7 +179,9 @@ function Brain:chooseWorker(profession)
     local best = nil
     for _, worker in pairs(self.workers) do
         local busy = worker.currentTask ~= nil or (worker.status and worker.status.currentTask ~= nil)
-        if worker.rednetId and not busy and (not profession or worker.profession == profession) then
+        local s = worker.status or {}
+        local movable = s.navReady ~= false and s.pos ~= nil and s.facing ~= nil
+        if worker.rednetId and not busy and movable and (not profession or worker.profession == profession) then
             best = worker
             break
         end
@@ -150,24 +194,82 @@ function Brain:assignWorkerTask(worker, task)
     worker.currentTask = task
     task.worker = worker.id
     taskQueue.markRunning(self.subtaskQueue, task.id)
+    task.sentAt = now()
+    task.accepted = false
     protocol.send(self.cfg, worker.rednetId, { kind = "worker_task", worker = worker.id, task = task })
     if self.currentReport then reportLib.addWorkerTask(self.currentReport); reportLib.event(self.currentReport, "worker_task_sent", { worker = worker.id, task = task }) end
     return true
 end
 
 function Brain:planHighestPointSearch(area)
-    for _, column in ipairs(terrain.splitAreaIntoColumns(area)) do
-        for y = column.maxY, column.minY, -1 do
-            local task = protocol.makeTask("move_action", {
-                wohin = vec3.new(column.x, y, column.z),
-                aktion = true,
-                requiredProfession = "bergbau",
-                requireSupport = true,
-                phase = "highest_search",
-            })
-            taskQueue.push(self.subtaskQueue, task)
+    for y = area.maxY, area.minY, -1 do
+        for x = area.minX, area.maxX do
+            for z = area.minZ, area.maxZ do
+                local task = protocol.makeTask("inspect_block", {
+                    target = vec3.new(x, y, z),
+                    requiredProfession = nil,
+                    requireSupport = true,
+                    phase = "highest_search",
+                    y = y,
+                })
+                task.priority = 3
+                task.searchY = y
+                taskQueue.push(self.subtaskQueue, task)
+            end
+        end
+        if y < area.maxY then
+            -- Niedrigere Ebenen werden erst freigegeben, wenn auf hoeheren Ebenen
+            -- nichts gefunden wurde.
+            for _, task in ipairs(taskQueue.list(self.subtaskQueue, "pending")) do
+                if task.searchY == y then task.status = "held" end
+            end
         end
     end
+end
+
+function Brain:releaseNextSearchLayer()
+    local highestHeld
+    for _, task in ipairs(taskQueue.list(self.subtaskQueue)) do
+        if task.status == "held" and task.searchY and (not highestHeld or task.searchY > highestHeld) then highestHeld = task.searchY end
+    end
+    if not highestHeld then return false end
+    for _, task in ipairs(taskQueue.list(self.subtaskQueue)) do
+        if task.status == "held" and task.searchY == highestHeld then task.status = "pending" end
+    end
+    if self.currentReport then reportLib.event(self.currentReport, "highest_search_layer_released", { y = highestHeld }) end
+    return true
+end
+
+function Brain:cancelLowerSearchTasks(foundY)
+    for _, task in ipairs(taskQueue.list(self.subtaskQueue)) do
+        if (task.status == "pending" or task.status == "held") and task.searchY and task.searchY <= foundY then
+            task.status = "done"
+            task.result = { skipped = true, reason = "higher_block_found", foundY = foundY }
+            task.finishedAt = now()
+        end
+    end
+end
+
+function Brain:searchLayerHasOpen(y)
+    for _, task in ipairs(taskQueue.list(self.subtaskQueue)) do
+        if task.searchY == y and (task.status == "pending" or task.status == "running") then return true end
+    end
+    return false
+end
+
+function Brain:maybeAdvanceHighestSearch()
+    if not self.currentCommand or self.currentCommand.kind ~= "abbau" or self.currentCommand.layerMiningPlanned then return end
+    local highest = self:highestFromDoneTasks()
+    if highest then
+        self:cancelLowerSearchTasks(highest.y)
+        return
+    end
+    local activeY
+    for _, task in ipairs(taskQueue.list(self.subtaskQueue)) do
+        if task.searchY and (task.status == "pending" or task.status == "running") and (not activeY or task.searchY > activeY) then activeY = task.searchY end
+    end
+    if activeY and not self:searchLayerHasOpen(activeY) then self:releaseNextSearchLayer() end
+    if not activeY then self:releaseNextSearchLayer() end
 end
 
 function Brain:planOuterToInnerLayer(area, y)
@@ -203,7 +305,7 @@ end
 function Brain:planStandby()
     if self.standbyPlanned then return end
     self.standbyPlanned = true
-    self.status = "standby"
+    self.status = "standby_requested"
     for _, worker in pairs(self.workers) do
         if worker.rednetId and self.cfg.initChest then
             protocol.send(self.cfg, worker.rednetId, { kind = "worker_standby", target = self.cfg.initChest })
@@ -227,7 +329,7 @@ end
 
 function Brain:maybePromoteCommand()
     if self.currentCommand then return end
-    local command = taskQueue.pop(self.commandQueue)
+    local command = taskQueue.firstPending(self.commandQueue)
     if not command then return end
     taskQueue.markRunning(self.commandQueue, command.id)
     if command.kind == "abbau" then
@@ -246,9 +348,10 @@ end
 function Brain:highestFromDoneTasks()
     local highest
     for _, task in ipairs(taskQueue.list(self.subtaskQueue, "done")) do
-        local pos = task.payload and task.payload.wohin
-        if pos and task.result and task.result.dug and (not highest or pos.y > highest.y) then
+        local pos = task.result and task.result.target or (task.payload and (task.payload.target or task.payload.wohin))
+        if pos and task.result and task.result.hasBlock and (not highest or pos.y > highest.y) then
             highest = vec3.copy(pos)
+            highest.block = task.result.block
         end
     end
     return highest
@@ -256,7 +359,8 @@ end
 
 function Brain:maybeFinishOrAdvance()
     if not self.currentCommand then return end
-    if queueSize(self.subtaskQueue, "pending") > 0 or queueSize(self.subtaskQueue, "running") > 0 then return end
+    self:maybeAdvanceHighestSearch()
+    if taskQueue.hasPending(self.subtaskQueue) or taskQueue.hasRunning(self.subtaskQueue) then return end
     if self.currentCommand.kind == "abbau" and not self.currentCommand.layerMiningPlanned then
         local highest = self:highestFromDoneTasks()
         if not highest then
@@ -285,21 +389,70 @@ local function nextRunnableTask(self)
     return pending[1]
 end
 
+function Brain:claimServiceTask()
+    local pending = taskQueue.list(self.subtaskQueue, "pending")
+    table.sort(pending, function(a, b) return (a.priority or 5) < (b.priority or 5) end)
+    for _, task in ipairs(pending) do
+        if task.kind == "service_fuel" or task.kind == "service_unload" then
+            taskQueue.markRunning(self.subtaskQueue, task.id)
+            return task
+        end
+    end
+    return nil
+end
+
+function Brain:completeServiceTask(taskId, ok, resultOrError)
+    if ok then taskQueue.markDone(self.subtaskQueue, taskId, resultOrError)
+    else
+        taskQueue.markFailed(self.subtaskQueue, taskId, resultOrError)
+        self:warn("service:" .. tostring(taskId), "Service-Task fehlgeschlagen: " .. tostring(resultOrError), { taskId = taskId })
+        if self.currentReport then reportLib.addFailure(self.currentReport) end
+    end
+    if self.currentReport then reportLib.event(self.currentReport, "service_task_done", { taskId = taskId, ok = ok, result = resultOrError }) end
+end
+
+function Brain:checkAcceptedTimeouts()
+    local t = now()
+    for _, task in ipairs(taskQueue.list(self.subtaskQueue, "running")) do
+        if task.worker and task.accepted == false and task.sentAt and t - task.sentAt > 5000 then
+            self:warn("accept:" .. tostring(task.id), "Worker hat Task nicht bestaetigt: " .. tostring(task.worker) .. " / " .. tostring(task.kind), { task = task })
+        end
+    end
+end
+
+function Brain:warnNoWorker(task)
+    local profession = task.payload and task.payload.requiredProfession
+    local key = "worker:" .. tostring(profession or "any")
+    local text
+    if profession then text = "Keine passenden Worker fuer " .. tostring(profession) .. " (kein freier Worker fuer Profession " .. tostring(profession) .. ")"
+    else text = "Kein freier Worker fuer Aufgabe " .. tostring(task.kind) end
+    self:warn(key, text .. ". Bekannte Worker: " .. self:knownWorkerSummary(), { task = task, workers = self.workers })
+end
+
+function Brain:warnMissingMiningWorker()
+    if not self.currentCommand or self.currentCommand.kind ~= "abbau" then return end
+    for _, worker in pairs(self.workers) do
+        if worker.profession == "bergbau" then return end
+    end
+    self:warn("missing:bergbau", "Keine passenden Worker fuer bergbau. Bekannte Worker: " .. self:knownWorkerSummary(), { workers = self.workers })
+end
+
 function Brain:tick()
     self:maybePromoteCommand()
+    self:checkAcceptedTimeouts()
+    self:warnMissingMiningWorker()
     local task = nextRunnableTask(self)
     if task then
-        if task.kind == "move_action" then
+        if task.kind == "move_action" or task.kind == "inspect_block" or task.kind == "scan_block" then
             local profession = task.payload and task.payload.requiredProfession
             local worker = self:chooseWorker(profession)
-            if worker then self:assignWorkerTask(worker, task) end
+            if worker then self:assignWorkerTask(worker, task) else self:warnNoWorker(task) end
         elseif task.kind == "service_fuel" or task.kind == "service_unload" then
-            taskQueue.markDone(self.subtaskQueue, task.id, { planned = true })
-            if self.currentReport then reportLib.event(self.currentReport, task.kind, task.payload) end
+            -- Wird vom Koordinator-Service-Loop beansprucht.
         end
     end
     self:maybeFinishOrAdvance()
-    if not self.currentCommand and taskQueue.isEmpty(self.commandQueue) and taskQueue.isEmpty(self.subtaskQueue) then
+    if not self.currentCommand and not taskQueue.hasOpen(self.commandQueue) and not taskQueue.hasOpen(self.subtaskQueue) then
         self:planStandby()
     else
         self.standbyPlanned = false
@@ -318,6 +471,9 @@ function Brain:statusSnapshot()
         subtaskQueue = taskQueue.list(self.subtaskQueue),
         currentCommand = self.currentCommand,
         currentReport = self.currentReport and self.currentReport.id or nil,
+        warnings = self.warnings,
+        navReady = self.coordinatorNav.ready,
+        navError = self.coordinatorNav.error,
         workers = workers,
     }
 end
