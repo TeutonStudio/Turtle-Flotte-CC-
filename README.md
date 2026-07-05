@@ -22,6 +22,35 @@ Die folgenden Befehle verwenden dieses Repository:
 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
+## Version v3
+
+v3 aktualisiert die Laufzeit auf `3.0.0` und behaelt das kompatible Rednet-Protokoll `teuton_fleet_v2`.
+
+- JSON-Berichte und Rednet-Nachrichten werden vor dem Serialisieren bereinigt, damit wiederverwendete Tabellen und echte Zyklen den Koordinator nicht mehr mit `Cannot serialize table with repeated entries` beenden.
+- Chatty/Chatbox-Fehler beenden den Koordinator nicht mehr.
+- Die Treibstoffsuche legt versehentlich gezogene Nicht-Treibstoff-Items wieder in die Init-Truhe zurueck.
+- `init.lua` ueberschreibt bestehende `fleet_config.lua` oder `fleet_pocket_config.lua` nicht mehr. Stattdessen wird eine `*.example.lua` geschrieben.
+
+## Update / Reinstall
+
+Zum Aktualisieren `init.lua` erneut laden und ausfuehren:
+
+```text
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init
+init koordinator bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
+```
+
+Wenn bereits eine Config existiert, bleibt sie erhalten. Neue Beispielwerte landen in `fleet_config.example.lua` oder `fleet_pocket_config.example.lua`.
+
+Nach jedem Koordinator-Update `fleet_config.lua` pruefen, besonders:
+
+```lua
+start = { x = 789, y = 64, z = -967 }
+facing = "north"
+initChest = { x = 789, y = 64, z = -968 }
+chestSide = "front"
+```
+
 ## Taschencomputer Einrichten
 
 Der Taschencomputer braucht ein Endermodem/Wireless Modem und die Pocket-Steuerung `flotte`.
@@ -29,8 +58,8 @@ Der Taschencomputer braucht ein Endermodem/Wireless Modem und die Pocket-Steueru
 Auf dem Taschencomputer ausfuehren:
 
 ```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init
-init pocket bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init_flotte.lua
+init_flotte.lua pocket bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
 Bedeutung:

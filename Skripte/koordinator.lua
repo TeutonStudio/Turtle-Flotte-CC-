@@ -47,11 +47,11 @@ local function chat(text)
         local p = peripheral.wrap(name)
         if p then
             if type(p.sendMessage) == "function" then
-                p.sendMessage("[" .. cfg.id .. "] " .. text)
-                return
+                local ok = pcall(function() p.sendMessage("[" .. cfg.id .. "] " .. text) end)
+                if ok then return end
             elseif type(p.sendFormattedMessage) == "function" then
-                p.sendFormattedMessage("[" .. cfg.id .. "] " .. text)
-                return
+                local ok = pcall(function() p.sendFormattedMessage("[" .. cfg.id .. "] " .. text) end)
+                if ok then return end
             end
         end
     end
@@ -74,8 +74,9 @@ local function ensureReportDir()
 end
 
 local function encodeJson(value)
-    if textutils and textutils.serializeJSON then return textutils.serializeJSON(value) end
-    if textutils and textutils.serialiseJSON then return textutils.serialiseJSON(value) end
+    local safe = fleet.safeCopy(value)
+    if textutils and textutils.serializeJSON then return textutils.serializeJSON(safe) end
+    if textutils and textutils.serialiseJSON then return textutils.serialiseJSON(safe) end
     error("textutils.serializeJSON fehlt")
 end
 
@@ -95,7 +96,7 @@ local function saveReport(report)
             status = r.status,
             createdAt = r.createdAt,
             updatedAt = r.updatedAt,
-            chest = r.chest,
+            chest = fleet.safeCopy(r.chest),
         }
     end
     table.sort(index, function(a, b) return tostring(a.createdAt) < tostring(b.createdAt) end)
@@ -112,13 +113,18 @@ local function appendReport(reportId, text, extra)
     report.events[#report.events + 1] = {
         at = report.updatedAt,
         text = text,
-        extra = extra,
+        extra = fleet.safeCopy(extra),
     }
-    saveReport(report)
+    local ok, err = pcall(function() saveReport(report) end)
+    if not ok then
+        state.lastError = "Report konnte nicht gespeichert werden: " .. tostring(err)
+        print("[Koordinator] " .. state.lastError)
+    end
 end
 
 local function startReport(requestId, kind, job)
     local id = requestId or fleet.requestId()
+    local safeJob = fleet.safeCopy(job)
     local report = {
         id = id,
         kind = kind,
@@ -127,15 +133,15 @@ local function startReport(requestId, kind, job)
         updatedAt = now(),
         coordinator = cfg.id,
         group = cfg.group,
-        chest = job and job.chest or nil,
-        job = job,
+        chest = job and fleet.safeCopy(job.chest) or nil,
+        job = safeJob,
         workers = {},
         events = {},
     }
     reports[id] = report
     state.currentReportId = id
     state.currentJobKind = kind
-    state.currentJobChest = job and job.chest or state.currentJobChest
+    state.currentJobChest = job and fleet.safeCopy(job.chest) or state.currentJobChest
     appendReport(id, "Auftrag angelegt: " .. tostring(kind), { job = job })
     return report
 end
@@ -254,6 +260,16 @@ local function returnNonFuelNonTurtleToChest()
     turtle.select(1)
 end
 
+local function returnNonFuelToChest()
+    for i = 1, 16 do
+        local d = turtle.getItemDetail(i)
+        if d and not isFuelSlot(i) then
+            returnSlotToChest(i)
+        end
+    end
+    turtle.select(1)
+end
+
 local function returnAllLooseItemsToChest()
     for i = 1, 16 do
         if turtle.getItemCount(i) > 0 then returnSlotToChest(i) end
@@ -335,6 +351,7 @@ local function pullFuelFromChest(minItems)
         if countFuelInInventory() - before >= minItems then break end
         local ok = suckFrom(chestSide, 1)
         if not ok then break end
+        returnNonFuelToChest()
     end
 
     local pulled = countFuelInInventory() - before
@@ -445,7 +462,7 @@ local function recordWorker(sender, msg)
     workers[id].role = msg.workerRole or workers[id].role
     workers[id].online = true
     workers[id].lastSeen = os.epoch("utc")
-    workers[id].status = msg.status or workers[id].status
+    workers[id].status = fleet.safeCopy(msg.status or workers[id].status)
 end
 
 local function getWorkersByRole(role)
@@ -757,13 +774,15 @@ local function serviceLoop()
             local req = table.remove(state.serviceQueue, 1)
             local ok, err = pcall(function() handleServiceRequest(req) end)
             if ok then
-                completeService(req, true)
+                local sent = pcall(function() completeService(req, true) end)
+                if not sent then print("[Koordinator] Service-Antwort konnte nicht gesendet werden") end
             else
                 local text = tostring(err)
                 state.lastError = text
                 appendReport(req.reportId, "Koordinator-Service fehlgeschlagen: " .. text)
                 chat("Koordinator-Service fehlgeschlagen fuer " .. tostring(req.worker) .. ": " .. text)
-                completeService(req, false, text)
+                local sent = pcall(function() completeService(req, false, text) end)
+                if not sent then print("[Koordinator] Service-Fehlerantwort konnte nicht gesendet werden") end
             end
             state.serviceBusy = false
             if #state.serviceQueue == 0 and cfg.initChest then
@@ -961,9 +980,9 @@ local function handlePocket(sender, msg)
             return
         end
         local old = state.currentJobChest
-        state.currentJobChest = msg.chest
+        state.currentJobChest = fleet.safeCopy(msg.chest)
         local report = reports[state.currentReportId]
-        if report then report.chest = msg.chest end
+        if report then report.chest = fleet.safeCopy(msg.chest) end
         appendReport(state.currentReportId,
             "Lager Truhenaenderungsdiktat von " .. vecString(old) .. " nach " .. vecString(msg.chest),
             { old = old, new = msg.chest, dictatedBy = msg.from or "pocket" })
@@ -976,7 +995,13 @@ end
 
 local function heartbeatLoop()
     while true do
-        fleet.broadcast(cfg, { kind = "coordinator_hello", coordinator = cfg.id })
+        local ok, err = pcall(function()
+            fleet.broadcast(cfg, { kind = "coordinator_hello", coordinator = cfg.id })
+        end)
+        if not ok then
+            state.lastError = "Heartbeat fehlgeschlagen: " .. tostring(err)
+            print("[Koordinator] " .. state.lastError)
+        end
         sleep(cfg.statusInterval or 5)
     end
 end
@@ -986,53 +1011,60 @@ local function listenLoop()
     chat("Koordinator online")
 
     while true do
-        local sender, msg = fleet.receive(cfg)
-        if sender and type(msg) == "table" then
-            if msg.kind == "worker_hello" or msg.kind == "worker_status" or msg.kind == "worker_progress" or msg.kind == "worker_done" or msg.kind == "worker_error" then
-                recordWorker(sender, msg)
-                if msg.kind == "worker_progress" then
-                    log(msg.worker .. ": " .. tostring(msg.progress))
-                    appendReport(msg.request_id, "Fortschritt " .. tostring(msg.worker) .. ": " .. tostring(msg.progress), {
-                        worker = msg.worker,
-                        pos = msg.pos,
-                        facing = msg.facing,
-                    })
-                end
-                if msg.kind == "worker_done" then
-                    local active = state.activeJobs[msg.request_id]
-                    if active then
-                        active.running = math.max(0, active.running - 1)
-                        if workers[msg.worker] then markWorkerBusy(workers[msg.worker], false) end
-                        appendReport(msg.request_id, "Arbeiter " .. tostring(msg.worker) .. " meldet Schicht fertig", {
+        local ok, err = pcall(function()
+            local sender, msg = fleet.receive(cfg)
+            if sender and type(msg) == "table" then
+                if msg.kind == "worker_hello" or msg.kind == "worker_status" or msg.kind == "worker_progress" or msg.kind == "worker_done" or msg.kind == "worker_error" then
+                    recordWorker(sender, msg)
+                    if msg.kind == "worker_progress" then
+                        log(msg.worker .. ": " .. tostring(msg.progress))
+                        appendReport(msg.request_id, "Fortschritt " .. tostring(msg.worker) .. ": " .. tostring(msg.progress), {
                             worker = msg.worker,
-                            status = msg.status,
+                            pos = msg.pos,
+                            facing = msg.facing,
                         })
-                        dispatchLayerJobs(msg.request_id)
-                        if active.running == 0 and active.nextLayer > #active.layers then
-                            state.activeJobs[msg.request_id] = nil
-                            finishReport(msg.request_id, "done", "Alle Y-Schichten abgeschlossen")
+                    end
+                    if msg.kind == "worker_done" then
+                        local active = state.activeJobs[msg.request_id]
+                        if active then
+                            active.running = math.max(0, active.running - 1)
+                            if workers[msg.worker] then markWorkerBusy(workers[msg.worker], false) end
+                            appendReport(msg.request_id, "Arbeiter " .. tostring(msg.worker) .. " meldet Schicht fertig", {
+                                worker = msg.worker,
+                                status = msg.status,
+                            })
+                            dispatchLayerJobs(msg.request_id)
+                            if active.running == 0 and active.nextLayer > #active.layers then
+                                state.activeJobs[msg.request_id] = nil
+                                finishReport(msg.request_id, "done", "Alle Y-Schichten abgeschlossen")
+                            end
+                        else
+                            finishReport(msg.request_id, "done", "Arbeiter " .. tostring(msg.worker) .. " meldet fertig", {
+                                worker = msg.worker,
+                                status = msg.status,
+                            })
                         end
-                    else
-                        finishReport(msg.request_id, "done", "Arbeiter " .. tostring(msg.worker) .. " meldet fertig", {
+                    end
+                    if msg.kind == "worker_error" then
+                        chat("Worker-Fehler " .. tostring(msg.worker) .. ": " .. tostring(msg.error))
+                        state.activeJobs[msg.request_id] = nil
+                        finishReport(msg.request_id, "error", "Arbeiter " .. tostring(msg.worker) .. " meldet Fehler: " .. tostring(msg.error), {
                             worker = msg.worker,
+                            error = msg.error,
                             status = msg.status,
                         })
                     end
+                elseif msg.kind == "worker_service_request" then
+                    enqueueService(sender, msg)
+                elseif msg.kind == "pocket_command" then
+                    handlePocket(sender, msg)
                 end
-                if msg.kind == "worker_error" then
-                    chat("Worker-Fehler " .. tostring(msg.worker) .. ": " .. tostring(msg.error))
-                    state.activeJobs[msg.request_id] = nil
-                    finishReport(msg.request_id, "error", "Arbeiter " .. tostring(msg.worker) .. " meldet Fehler: " .. tostring(msg.error), {
-                        worker = msg.worker,
-                        error = msg.error,
-                        status = msg.status,
-                    })
-                end
-            elseif msg.kind == "worker_service_request" then
-                enqueueService(sender, msg)
-            elseif msg.kind == "pocket_command" then
-                handlePocket(sender, msg)
             end
+        end)
+        if not ok then
+            state.lastError = "Nachrichtenverarbeitung fehlgeschlagen: " .. tostring(err)
+            print("[Koordinator] " .. state.lastError)
+            sleep(0.2)
         end
     end
 end

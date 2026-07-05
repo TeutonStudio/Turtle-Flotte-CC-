@@ -3,7 +3,7 @@
 -- danach laedt es die benoetigten Rollen-Dateien nach.
 
 local DEFAULT_BASE_URL = "https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master"
-local VERSION = "2.0.0"
+local VERSION = "3.0.0"
 
 local function lib(name) return { src = "Bibliothek/" .. name, dst = name } end
 local function script(name) return { src = "Skripte/" .. name, dst = name } end
@@ -52,6 +52,21 @@ local function write(path, content)
     local h = fs.open(path, "w")
     h.write(content)
     h.close()
+end
+
+local function writeConfig(path, content)
+    if not fs.exists(path) then
+        write(path, content)
+        print("Config geschrieben: " .. path)
+        return path
+    end
+
+    local example = path:gsub("%.lua$", ".example.lua")
+    if example == path then example = path .. ".example" end
+    write(example, content)
+    print("Bestehende Config behalten: " .. path)
+    print("Neue Beispiel-Config geschrieben: " .. example)
+    return example
 end
 
 local function download(baseUrl, file)
@@ -138,9 +153,9 @@ print("Teuton-Fleet Init " .. VERSION .. " fuer " .. role)
 for _, file in ipairs(ROLE_FILES[role]) do download(baseUrl, file) end
 
 if role == "pocket" then
-    write("fleet_pocket_config.lua", configFor(role, group, id, coordinator))
+    writeConfig("fleet_pocket_config.lua", configFor(role, group, id, coordinator))
 else
-    write("fleet_config.lua", configFor(role, group, id, coordinator))
+    writeConfig("fleet_config.lua", configFor(role, group, id, coordinator))
 end
 
 if role == "koordinator" then

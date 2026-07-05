@@ -3,7 +3,38 @@
 
 local M = {}
 
-M.VERSION = "2.0.0"
+M.VERSION = "3.0.0"
+
+local function safeCopyValue(value, stack)
+    local valueType = type(value)
+    if valueType ~= "table" then
+        if valueType == "string" or valueType == "number" or valueType == "boolean" or value == nil then
+            return value
+        end
+        return tostring(value)
+    end
+
+    if stack[value] then return "<cycle>" end
+
+    stack[value] = true
+    local copy = {}
+    for key, child in pairs(value) do
+        local keyType = type(key)
+        if keyType == "string" or keyType == "number" then
+            copy[key] = safeCopyValue(child, stack)
+        end
+    end
+    stack[value] = nil
+    return copy
+end
+
+function M.safeCopy(value)
+    return safeCopyValue(value, {})
+end
+
+function M.safeMessage(value)
+    return M.safeCopy(value)
+end
 
 function M.loadConfig(requiredRole)
     local ok, cfg = pcall(require, "fleet_config")
@@ -42,7 +73,8 @@ function M.requestId()
 end
 
 function M.prepareMessage(cfg, msg)
-    msg = msg or {}
+    msg = M.safeMessage(msg or {})
+    if type(msg) ~= "table" then msg = { value = msg } end
     msg.fleet = cfg.group
     msg.version = M.VERSION
     msg.from = cfg.id
