@@ -1,14 +1,12 @@
--- Kopieren nach: fleet_config.lua auf die Mining-/Spitzhacken-Turtle
+-- Kopieren nach: fleet_config.lua auf einen beliebigen v5-Worker.
+-- Der Beruf wird aus dem ausgeruesteten Turtle-Upgrade erkannt.
 return {
     group = "bergwerk_789_-968",
-    id = "bergbau_789_-968",
+    id = "worker_bergbau_789_-968",
     role = "worker",
-    workerRole = "bergbau",
     coordinator = "basis_789_-968",
     protocolPrefix = "teuton_fleet_v2",
     statusInterval = 5,
-    reportItems = false,
-    minFuel = 500,
-    serviceFuelThreshold = 100,
-    preferredPickaxe = "minecraft:diamond_pickaxe",
+    start = nil,
+    facing = nil,
 }

@@ -1,12 +1,12 @@
--- Kopieren nach: fleet_config.lua auf die Handwerks-Turtle
+-- Kopieren nach: fleet_config.lua auf einen beliebigen v5-Worker.
+-- Der Beruf wird aus dem ausgeruesteten Turtle-Upgrade erkannt.
 return {
     group = "bergwerk_789_-968",
-    id = "handwerk_789_-968",
+    id = "worker_handwerk_789_-968",
     role = "worker",
-    workerRole = "handwerk",
     coordinator = "basis_789_-968",
     protocolPrefix = "teuton_fleet_v2",
     statusInterval = 5,
-    reportItems = true,
-    minFuel = 500,
+    start = nil,
+    facing = nil,
 }

@@ -3,7 +3,7 @@
 
 local M = {}
 
-M.VERSION = "4.1.0"
+M.VERSION = "5.0.0"
 
 local function safeCopyValue(value, stack)
     local valueType = type(value)
@@ -44,7 +44,7 @@ function M.loadConfig(requiredRole)
 
     cfg.protocolPrefix = cfg.protocolPrefix or "teuton_fleet_v2"
     assert(cfg.group and cfg.group ~= "", "fleet_config.group fehlt")
-    assert(cfg.id and cfg.id ~= "", "fleet_config.id fehlt")
+    cfg.id = cfg.id or tostring(os.getComputerID())
 
     if requiredRole and cfg.role ~= requiredRole then
         error("Diese Datei erwartet role='" .. requiredRole .. "', Config hat aber role='" .. tostring(cfg.role) .. "'")

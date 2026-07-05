@@ -1,321 +1,222 @@
-# Turtle-Flotte fuer CC:Tweaked / ComputerCraft
+# Turtle-Flotte v5 fuer CC:Tweaked / ComputerCraft
 
-Diese Anleitung beschreibt die Einrichtung einer Flotte aus:
+v5 baut die Flotte generisch auf:
 
-- einem Taschencomputer fuer Befehle,
-- einer Koordinator-Turtle mit Endermodem und Chatty/Chatbox,
-- vier Worker-Turtles mit Endermodem und Werkzeug.
+- 1 Koordinator
+- n Arbeiter, n >= 1
+- 1 Taschencomputer fuer Befehle
 
-Im Repository liegt im Root nur `init.lua`. Die restlichen Dateien sind sortiert:
+Arbeiter haben keine fest verdrahteten Rollenskripte mehr. Jeder Arbeiter startet `worker.lua`, erkennt seine Turtle-Upgrades und meldet daraus seinen Beruf.
 
-- `Bibliothek/`: gemeinsame Lua-Module.
-- `Config/`: Beispiel-Configs.
-- `Skripte/`: Programme, Startup-Dateien und Dokumentation.
+Wichtig: Mit den zwei Slots des Arbeiters sind die Turtle-Upgrade-Slots gemeint, nicht Inventarslots. Jeder Arbeiter braucht ein Modem-Upgrade und ein Werkzeug-/Funktions-Upgrade.
 
-`init.lua` wird per `wget` auf jeden Computer geladen. Danach laedt es die benoetigten Dateien aus `Bibliothek/` und `Skripte/` nach und speichert sie auf dem ComputerCraft-Rechner flach als `fleet_common.lua`, `koordinator.lua`, `flotte.lua` usw.
+## Architektur
 
-## GitHub-URL
+Die Hauptprogramme sind duenn:
 
-Die folgenden Befehle verwenden dieses Repository:
+- `Skripte/koordinator.lua` startet Rednet, `coordinator_brain.lua` und die Loops.
+- `Skripte/worker.lua` startet `worker_runtime.lua`.
+- Alte Starter wie `worker_bergbau.lua` bleiben kompatibel, geben eine Deprecated-Warnung aus und starten intern `worker.lua`.
+- `Skripte/flotte.lua` ist die Taschencomputer-CLI.
+
+Neue Standardbibliotheken:
+
+- `vec3.lua`, `direction.lua`: Koordinaten und Richtungsmathematik.
+- `equipment.lua`: liest ausgeruestete Turtle-Upgrades.
+- `inventory.lua`: Fuel, Slots und Itemzaehlung.
+- `task_queue.lua`: FIFO-TODO-Listen fuer Befehle und Worker-Aufgaben.
+- `protocol.lua`: zentrale Rednet-Nachrichten.
+- `nav2.lua`: Navigation ohne automatisches Graben.
+- `safety.lua`: Sicherheitslogik gegen Herunterfallen.
+- `terrain.lua`: Terrainmodell und Abbauplanung.
+- `report.lua`: chronologische Reports mit Saldo.
+- `worker_runtime.lua`: universeller Worker.
+- `coordinator_brain.lua`: Koordinator-Planer.
+
+## Berufserkennung
+
+`equipment.lua` nutzt, falls vorhanden:
+
+- `turtle.getEquippedLeft()`
+- `turtle.getEquippedRight()`
+
+Falls die API in der Laufzeit fehlt, startet der Worker trotzdem. Der Beruf ist dann `unbekannt` und der Status enthaelt eine Warnung.
+
+Erkennung:
+
+- Upgrade-Name enthaelt `shovel` -> `graben`
+- Upgrade-Name enthaelt `pickaxe` -> `bergbau`
+- Upgrade-Name enthaelt `craft`, `crafting`, `workbench` oder `crafty` -> `handwerk`
+- Upgrade-Name enthaelt `axe`, aber nicht `pickaxe` -> `holzfaeller`
+- sonst -> `unbekannt`
+
+Der Koordinator ist verantwortlich, `aktion=true` nur an einen Arbeiter mit passendem Beruf zu senden. Der Arbeiter prueft nur, ob `requiredProfession` zu seinem Beruf passt.
+
+## Worker-TODO-Liste
+
+Jeder Worker haelt eine eigene FIFO-TODO-Liste. Der wichtigste Task ist `move_action`:
+
+```lua
+{
+  wohin = { x = 10, y = 64, z = 20 },
+  aktion = false,
+  requiredProfession = nil,
+  requireSupport = true,
+}
+```
+
+Semantik:
+
+- `aktion=false`: Worker laeuft exakt zu `wohin`, ohne zu graben.
+- `aktion=true`: Worker laeuft neben `wohin`, schaut zum Zielblock und baut ihn ab.
+- Bei falschem Beruf meldet der Worker `worker_task_failed` mit `wrong_profession`.
+- Bei Blockade meldet der Worker `worker_blocked` mit `pos`, `blockedPos` und `block`.
+- Bei Fuel `< 5` meldet der Worker `worker_need_fuel` und stoppt sicher.
+- Bei vollem Inventar meldet der Worker `worker_inventory_full` und stoppt sicher.
+
+`nav2.lua` graebt nie automatisch. Graben passiert nur bei expliziten Aktions-Tasks.
+
+## Koordinator-Queues
+
+Der Koordinator-Brain haelt:
+
+- `commandQueue`: Pocket-Befehle.
+- `subtaskQueue`: konkrete Worker- oder Service-Aufgaben.
+- `terrain`: bekannte Bloecke, Luft, Blockaden und Support.
+- `reports`: chronologische Reports.
+
+Prioritaeten:
+
+1. `worker_need_fuel`
+2. `worker_inventory_full`
+3. `worker_blocked`
+4. laufende Scan-/Abbau-Subtasks
+5. neue Pocket-Commands
+6. Standby
+
+Blockaden werden im Terrainmodell gespeichert. Aus dem Blocknamen bestimmt der Koordinator den passenden Beruf und schickt einen passenden Worker mit `move_action` und `aktion=true`.
+
+## Abbau
+
+Pocket-Befehl:
+
+```text
+flotte abbau 100,64,200 90,67,190 110,80,210
+flotte abbau lager 100,64,200 von 90,67,190 bis 110,80,210
+```
+
+Ablauf:
+
+1. Befehl wird in die `commandQueue` eingetragen.
+2. Report startet.
+3. Bereich wird normalisiert.
+4. Highest-Point-Search wird als Subtasks geplant.
+5. Wenn der hoechste Punkt bekannt ist, plant der Koordinator Y-Schichten von `highest.y` bis `area.minY`.
+6. Jede Schicht wird von aussen nach innen geplant.
+7. Aussenpositionen werden nur mit `requireSupport=true` genutzt, damit Worker nicht blind nach aussen laufen und herunterfallen.
+8. Blockaden werden als Terraininformation genutzt und mit passendem Worker bearbeitet.
+9. Wenn alle Subtasks fertig sind, wird der Report gespeichert.
+
+## Standby
+
+Wenn keine Pocket-Befehle und keine Subtasks offen sind, plant der Koordinator Standby:
+
+- Worker zur Init-Truhe zurueckrufen.
+- Worker einzeln abbauen.
+- Worker in die Init-Truhe legen.
+- Lose Items in Lager/Init-Truhe sortieren.
+- Koordinator an/auf die Init-Truhe bewegen.
+- Status wird `standby`.
+
+Falls ein Worker nicht erreichbar ist, wird eine Warnung/Report-Ereignis erzeugt. Es wird nicht endlos gewartet.
+
+## Installation
+
+Repository-URL:
 
 ```text
 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
-## Taschencomputer Einrichten
-
-Der Taschencomputer braucht ein Endermodem/Wireless Modem und die Pocket-Steuerung `flotte`.
-
-Auf dem Taschencomputer ausfuehren:
-
-```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init_flotte.lua
-init_flotte pocket bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
-```
-
-Bedeutung:
-
-- `bergwerk_01`: Gruppenname der Flotte.
-- `basis_01`: ID des Koordinators.
-
-Danach steht der Befehl `flotte` zur Verfuegung.
-
-## Koordinator Einrichten
-
-Der Koordinator ist eine Turtle, die vor der Init-/Personal-Truhe steht. Die Init-Truhe steht hinter dem Koordinator.
-
-Der Koordinator braucht:
-
-- Endermodem/Wireless Modem fuer Rednet.
-- Chatty/Chatbox-Peripheral fuer Meldungen im Chat.
-- Treibstoff in der Init-Truhe.
-- Worker-Turtles in der Init-Truhe.
-
-Auf dem Koordinator ausfuehren:
+Koordinator:
 
 ```text
 wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
 init koordinator bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
-Danach `fleet_config.lua` auf dem Koordinator pruefen und ausfuellen:
-
-```lua
-start = { x = 789, y = 64, z = -967 }
-facing = "north"
-initChest = { x = 789, y = 64, z = -968 }
-chestSide = "back"
-```
-
-Wichtig:
-
-- `start` ist die GPS-Startposition des Koordinators.
-- `facing` ist die Blickrichtung beim Start.
-- `initChest` ist die Koordinate der Init-/Personal-Truhe.
-- `chestSide` ist die Seite, auf der die Truhe beim Start steht, normalerweise `back`.
-
-Ohne `initChest` kann der Koordinator Worker deployen, aber nach Servicefahrten nicht sicher zur Ursprungstruhe zurueckkehren.
-
-Der Koordinator gibt jedem Worker beim Deploy einen Stack Treibstoff. Wenn in der Init-Truhe weniger als `(Arbeiter + 1) * 64` Treibstoff-Puffer uebrig ist, meldet er das im Chat. Wenn kein Treibstoff mehr gezogen werden kann, meldet er das ebenfalls.
-
-## Worker Einrichten
-
-Jeder Worker braucht:
-
-- Endermodem/Wireless Modem fuer Rednet.
-- Ein passendes Werkzeug.
-- Eine eindeutige ID.
-- Dieselbe Gruppe wie der Koordinator.
-- Die Koordinator-ID.
-
-Worker melden nach dem Platzieren ihre Rolle per Rednet. Dadurch koennen mehrere Worker derselben Kategorie genutzt werden.
-
-### Bergbau-Worker
-
-Fuer harte Bloecke, Stein, Erze, Deepslate usw.
-
-Benötigt:
-
-- Mining Turtle oder Turtle mit Spitzhacke.
-- Endermodem.
-
-Auf der Bergbau-Turtle ausfuehren:
+Worker:
 
 ```text
 wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
-init bergbau bergwerk_01 bergbau_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
+init worker bergwerk_01 worker_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
-### Graben-Worker
-
-Fuer weiche Bloecke wie Erde, Sand, Kies, Lehm, Schnee.
-
-Benötigt:
-
-- Turtle mit Schaufel.
-- Endermodem.
-
-Auf der Graben-Turtle ausfuehren:
+Alte Rollen bleiben Alias fuer Worker:
 
 ```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
-init graben bergwerk_01 graben_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
+init bergbau bergwerk_01 worker_bergbau_01 basis_01
+init graben bergwerk_01 worker_graben_01 basis_01
+init holzfaeller bergwerk_01 worker_holz_01 basis_01
+init handwerk bergwerk_01 worker_handwerk_01 basis_01
 ```
 
-### Handwerk-Worker
-
-Fuer Crafting-Auftraege.
-
-Benötigt:
-
-- Crafty Turtle/Crafting Turtle.
-- Endermodem.
-- Zutaten im Inventar der Handwerks-Turtle.
-
-Auf der Handwerks-Turtle ausfuehren:
+Taschencomputer:
 
 ```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
-init handwerk bergwerk_01 handwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init_flotte.lua
+init_flotte pocket bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
-### Holzfaeller-Worker
+## Config-Minimierung
 
-Fuer Baeume, Staemme, Holz und Blaetter.
+Pflicht:
 
-Benötigt:
+- `group`
 
-- Turtle mit Axt.
-- Endermodem.
+Optional:
 
-Auf der Holzfaeller-Turtle ausfuehren:
+- `id`, sonst `os.getComputerID()`
+- `coordinator` beim Worker
+- `initChest`, wenn der Koordinator sie nicht automatisch/zuverlaessig bestimmen kann
+- `protocolPrefix`
+- `start` und `facing`, falls GPS/Facing-Kalibrierung nicht reicht
 
-```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
-init holzfaeller bergwerk_01 holz_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
-```
+Automatisch ermittelt, soweit die Laufzeit es hergibt:
 
-## Starten
-
-Nach der Einrichtung starten Koordinator und Worker ueber `startup.lua` automatisch.
-
-Manuell starten:
-
-```text
-koordinator
-```
-
-oder auf Workern:
-
-```text
-worker_bergbau
-worker_graben
-worker_handwerk
-worker_holzfaeller
-```
+- Worker-Beruf aus Turtle-Upgrades
+- Position per GPS
+- Facing per GPS-Bewegung
+- Worker-Discovery ueber `worker_hello`
+- Modem ueber Peripheral-/Rednet-Erkennung
 
 ## Taschencomputer-Befehle
 
-Alle Befehle laufen auf dem Taschencomputer.
-
-### Koordinatoren Suchen
-
 ```text
 flotte list
-```
-
-Zeigt erreichbare Koordinatoren in der konfigurierten Gruppe.
-
-### Status Anzeigen
-
-```text
 flotte status
-```
-
-Zeigt Koordinator, aktuelle Bericht-ID, Job-Truhe, Service-Warteschlange und bekannte Worker.
-
-### Worker Deployen
-
-```text
-flotte deploy all
-```
-
-Deployt standardmaessig vier bereits installierte Worker-Turtles aus der Init-Truhe. Die Init-Truhe steht hinter dem Koordinator (`chestSide = "back"`). In der Truhe muessen die Worker-Turtles bereits `startup.lua`, `fleet_config.lua`, die passende Rolle und ein Modem haben.
-
-Die Standardformation ist:
-
-```text
-1. Worker links platzieren, 64 Fuel-Items geben
-2. Worker rechts platzieren, 64 Fuel-Items geben
-3. Koordinator faehrt 1 Block vor
-4. Worker links platzieren, 64 Fuel-Items geben
-5. Worker rechts platzieren, 64 Fuel-Items geben
-6. Koordinator faehrt erneut 1 Block vor
-```
-
-Wenn `initChest` in der Koordinator-Config gesetzt ist, kann der Koordinator zur Init-Truhe zurueckfahren und Nachschub holen. Ohne `initChest` laedt er die benoetigten Worker und Fuel-Items vor dem ersten Vorfahren vor.
-
-```text
-flotte deploy bergbau
-flotte deploy graben
-flotte deploy handwerk
-flotte deploy holzfaeller
-```
-
-Deployt Worker, bis mindestens ein Worker der gewuenschten Rolle online ist.
-
-### Abbau Starten
-
-```text
-flotte abbau 100,64,200 90,67,190 110,80,210
-```
-
-Format:
-
-```text
-flotte abbau <job-truhe:x,y,z> <punkt1:x,y,z> <punkt2:x,y,z>
-flotte abbau lager <job-truhe:x,y,z> von <punkt1:x,y,z> bis <punkt2:x,y,z>
-```
-
-Der Koordinator zerlegt den Bereich in Y-Schichten von oben nach unten und vergibt Schichten an freie Bergbau-Worker. Worker bleiben bei vollem Inventar oder Treibstoffbedarf am Arbeitsplatz. Der Koordinator arbeitet die Service-Warteschlange ab, bringt Treibstoff und transportiert Items zur Job-Truhe.
-
-Der Abbau laeuft zweistufig:
-
-```text
-Etappe 1: abbau_prepare
-  Ein Bergbau-Worker sucht im Quader das hoechste tatsaechlich vorhandene Blockniveau und baut einen Zugang bis dorthin.
-
-Etappe 2: abbau
-  Der Koordinator startet nur die Schichten von diesem gefundenen Hoechstpunkt bis zur Unterkante des Bereichs.
-```
-
-Wenn im Quader kein Block gefunden wird, endet der Auftrag sauber als leerer Auftrag statt mit einem Fehler.
-
-### Job-Truhe Wechseln
-
-```text
-flotte lager_wechsel 105,64,205
-```
-
-Aendert die Job-Truhe des aktuell koordinierten Auftrags. Der Bericht enthaelt danach:
-
-```text
-Lager Truhenaenderungsdiktat von <alt> nach <neu>
-```
-
-### Crafting Starten
-
-```text
-flotte craft minecraft:diamond_pickaxe 1
-```
-
-Format:
-
-```text
-flotte craft <rezept> [anzahl]
-```
-
-Die Handwerks-Turtle craftet aus ihrem eigenen Inventar.
-
-### Rollen-Job Starten
-
-```text
-flotte job graben graben 100,64,200 90,67,190 110,80,210
-```
-
-Format:
-
-```text
-flotte job <rolle> <kind> <job-truhe:x,y,z> <punkt1:x,y,z> <punkt2:x,y,z>
-```
-
-Gedacht fuer direkte Rollenauftraege, z. B. Graben oder Holzfaellen.
-
-### Stop
-
-```text
+flotte abbau <lager:x,y,z> <von:x,y,z> <bis:x,y,z>
+flotte abbau lager <lager:x,y,z> von <von:x,y,z> bis <bis:x,y,z>
 flotte stop
+flotte standby
 ```
 
-Sendet einen Abbruch an bekannte Worker.
+`flotte status` zeigt:
 
-### Gruppe Oder Koordinator Ueberschreiben
+- Koordinatorstatus
+- `commandQueue`
+- `subtaskQueue`
+- aktueller Befehl
+- aktueller Report
+- Worker mit `id`, `profession`, Fuel, freien Slots, Position, Facing, Equipment und aktuellem Task
 
-```text
-flotte --gruppe bergwerk_02 --basis basis_02 status
-```
+## Reports
 
-Ueberschreibt Gruppe und Koordinator-ID nur fuer diesen Befehl.
+Reports liegen standardmaessig unter `berichte/`.
 
-## Berichte
+Sie enthalten:
 
-Der Koordinator schreibt JSON-Berichte:
-
-- `berichte/<request_id>.json`
-- `berichte/index.json`
-
-Berichte enthalten Auftrag, Lagertruhe, Worker, Fortschritt, Service-Anfragen, Treibstofflieferungen, Itemtransporte, Lagerwechsel, Fehler und Abschluss.
-
-## Verhalten Bei Hindernissen
-
-Der Koordinator baut bei normalen Servicefahrten keine Bloecke ab. Beim Initialisieren darf er nur die blockierte Deploy-Seite mit `turtle.dig()` freiraeumen. Wenn das nicht klappt, meldet er den stoerenden Block im Chat und im Bericht.
+- chronologische Events
+- Command-Payload
+- Status
+- Saldo mit Fuel, Items, Worker-Tasks und Fehleranzahl

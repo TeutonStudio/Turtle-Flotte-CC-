@@ -1,51 +1,58 @@
 -- init.lua
--- Bootstrap fuer Teuton-Fleet. Dieses Skript selbst per wget von GitHub laden,
--- danach laedt es die benoetigten Rollen-Dateien nach.
+-- Bootstrap fuer Teuton-Fleet v5.
 
 local DEFAULT_BASE_URL = "https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master"
-local VERSION = "4.1.0"
+local VERSION = "5.0.0"
 
 local function lib(name) return { src = "Bibliothek/" .. name, dst = name } end
 local function script(name) return { src = "Skripte/" .. name, dst = name } end
 
-local ROLE_FILES = {
-    koordinator = {
-        { src = "update.lua", dst = "update" }, lib("fleet_common.lua"), lib("nav.lua"), script("koordinator.lua"),
-    },
-    bergbau = {
-        { src = "update.lua", dst = "update" }, lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_bergbau.lua"),
-    },
-    graben = {
-        { src = "update.lua", dst = "update" }, lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_graben.lua"),
-    },
-    handwerk = {
-        { src = "update.lua", dst = "update" }, lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_handwerk.lua"),
-        lib("recipes.lua"), lib("crafting_lib.lua"),
-    },
-    holzfaeller = {
-        { src = "update.lua", dst = "update" }, lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_holzfaeller.lua"),
-    },
-    pocket = {
-        { src = "update.lua", dst = "update" }, script("flotte.lua"),
-    },
+local COMMON_V5 = {
+    lib("fleet_common.lua"),
+    lib("vec3.lua"),
+    lib("direction.lua"),
+    lib("equipment.lua"),
+    lib("inventory.lua"),
+    lib("task_queue.lua"),
+    lib("protocol.lua"),
+    lib("nav2.lua"),
+    lib("safety.lua"),
 }
 
-local WORKER_SCRIPT = {
-    bergbau = "worker_bergbau",
-    graben = "worker_graben",
-    handwerk = "worker_handwerk",
-    holzfaeller = "worker_holzfaeller",
+local WORKER_FILES = {
+    { src = "update.lua", dst = "update" },
+    COMMON_V5[1], COMMON_V5[2], COMMON_V5[3], COMMON_V5[4], COMMON_V5[5],
+    COMMON_V5[6], COMMON_V5[7], COMMON_V5[8], COMMON_V5[9],
+    lib("worker_runtime.lua"),
+    script("worker.lua"),
+}
+
+local ROLE_FILES = {
+    koordinator = {
+        { src = "update.lua", dst = "update" },
+        COMMON_V5[1], COMMON_V5[2], COMMON_V5[3], COMMON_V5[4], COMMON_V5[5],
+        COMMON_V5[6], COMMON_V5[7], COMMON_V5[8], COMMON_V5[9],
+        lib("terrain.lua"),
+        lib("report.lua"),
+        lib("coordinator_brain.lua"),
+        script("koordinator.lua"),
+    },
+    worker = WORKER_FILES,
+    bergbau = WORKER_FILES,
+    graben = WORKER_FILES,
+    handwerk = WORKER_FILES,
+    holzfaeller = WORKER_FILES,
+    pocket = {
+        { src = "update.lua", dst = "update" },
+        script("flotte.lua"),
+    },
 }
 
 local function usage()
-    print("init koordinator <gruppe> <id> [base_url]")
-    print("init <worker-rolle> <gruppe> <id> <koordinator> [base_url]")
+    print("init koordinator <gruppe> [id] [base_url]")
+    print("init worker <gruppe> [id] [koordinator] [base_url]")
+    print("init <bergbau|graben|handwerk|holzfaeller> <gruppe> [id] [koordinator] [base_url]")
     print("init pocket <gruppe> <koordinator> [base_url]")
-    print("Rollen: koordinator, bergbau, graben, handwerk, holzfaeller, pocket")
-    print("Beispiele:")
-    print("  init koordinator bergwerk_01 basis_01")
-    print("  init bergbau bergwerk_01 bergbau_01 basis_01")
-    print("  init pocket bergwerk_01 pocket basis_01")
 end
 
 local function write(path, content)
@@ -58,15 +65,12 @@ local function writeConfig(path, content)
     if not fs.exists(path) then
         write(path, content)
         print("Config geschrieben: " .. path)
-        return path
+    else
+        local example = path:gsub("%.lua$", ".example.lua")
+        write(example, content)
+        print("Bestehende Config behalten: " .. path)
+        print("Neue Beispiel-Config geschrieben: " .. example)
     end
-
-    local example = path:gsub("%.lua$", ".example.lua")
-    if example == path then example = path .. ".example" end
-    write(example, content)
-    print("Bestehende Config behalten: " .. path)
-    print("Neue Beispiel-Config geschrieben: " .. example)
-    return example
 end
 
 local function download(baseUrl, file)
@@ -80,78 +84,62 @@ local function download(baseUrl, file)
 end
 
 local function configFor(role, group, id, coordinator)
+    local function literal(value)
+        if value == nil then return "nil" end
+        return string.format("%q", value)
+    end
+
     if role == "koordinator" then
         return string.format([[return {
-    group = %q,
-    id = %q,
+    group = %s,
+    id = %s,
     role = "coordinator",
     protocolPrefix = "teuton_fleet_v2",
-    chestSide = "back",
-    deploySide = "left",
-    deploySides = { "left", "right", "front" },
-    deployCount = 4,
-    initFormation = {
-        { sides = { "left", "right" }, moveForwardAfter = true },
-        { sides = { "left", "right" }, moveForwardAfter = true },
-    },
-    deployPause = 1.5,
-    deployWait = 8,
-    workerOnlineWait = 12,
-    autoDeploy = true,
-    workerFuelItems = 64,
-    coordinatorFuelReserveItems = 64,
-    searchPullLimit = 32,
-    fuelSearchPullLimit = 128,
     statusInterval = 5,
     reportDir = "berichte",
-    abbauRole = "bergbau",
+    initChest = nil,
     start = nil,
     facing = nil,
-    initChest = nil,
-    chat = { enabled = true },
-    workers = {},
-}]], group, id)
+}]], literal(group), literal(id or "basis_" .. tostring(os.getComputerID())))
     end
 
     if role == "pocket" then
         return string.format([[return {
-    group = %q,
-    coordinator = %q,
+    group = %s,
+    coordinator = %s,
     protocolPrefix = "teuton_fleet_v2",
     timeout = 60,
-}]], group, coordinator)
+}]], literal(group), literal(coordinator))
     end
 
     return string.format([[return {
-    group = %q,
-    id = %q,
+    group = %s,
+    id = %s,
     role = "worker",
-    workerRole = %q,
-    coordinator = %q,
+    coordinator = %s,
     protocolPrefix = "teuton_fleet_v2",
     statusInterval = 5,
-    reportItems = false,
-    minFuel = 500,
-    serviceFuelThreshold = 100,
-}]], group, id, role, coordinator)
+    start = nil,
+    facing = nil,
+}]], literal(group), literal(id or tostring(os.getComputerID())), literal(coordinator))
 end
 
 local args = { ... }
 local role = args[1]
 local group = args[2]
+if not role or not ROLE_FILES[role] or not group then usage(); return end
+
 local id = args[3]
 local coordinator = args[4]
 local baseUrl = args[5] or DEFAULT_BASE_URL
 
-if not role or not ROLE_FILES[role] or not group or not id then usage(); return end
 if role == "koordinator" then
-    coordinator = nil
     baseUrl = args[4] or DEFAULT_BASE_URL
 elseif role == "pocket" then
-    coordinator = id
+    coordinator = args[3]
     baseUrl = args[4] or DEFAULT_BASE_URL
-else
     if not coordinator then usage(); return end
+elseif role == "worker" or role == "bergbau" or role == "graben" or role == "handwerk" or role == "holzfaeller" then
     baseUrl = args[5] or DEFAULT_BASE_URL
 end
 
@@ -161,13 +149,13 @@ for _, file in ipairs(ROLE_FILES[role]) do download(baseUrl, file) end
 if role == "pocket" then
     writeConfig("fleet_pocket_config.lua", configFor(role, group, id, coordinator))
 else
-    writeConfig("fleet_config.lua", configFor(role, group, id, coordinator))
+    writeConfig("fleet_config.lua", configFor(role == "koordinator" and role or "worker", group, id, coordinator))
 end
 
 if role == "koordinator" then
     write("startup.lua", 'shell.run("koordinator")\n')
 elseif role ~= "pocket" then
-    write("startup.lua", 'shell.run("' .. WORKER_SCRIPT[role] .. '")\n')
+    write("startup.lua", 'shell.run("worker")\n')
 end
 
-print("Init fertig. Bitte fleet_config.lua pruefen, besonders start/facing/initChest beim Koordinator.")
+print("Init fertig. v5 minimiert Config: group ist Pflicht, id/initChest/start/facing sind optional soweit automatisch ermittelbar.")
