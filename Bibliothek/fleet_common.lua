@@ -45,6 +45,7 @@ function M.loadConfig(requiredRole)
     cfg.protocolPrefix = cfg.protocolPrefix or "teuton_fleet_v2"
     assert(cfg.group and cfg.group ~= "", "fleet_config.group fehlt")
     cfg.id = cfg.id or tostring(os.getComputerID())
+    if requiredRole == "worker" and not cfg.role then cfg.role = "worker" end
 
     if requiredRole and cfg.role ~= requiredRole then
         error("Diese Datei erwartet role='" .. requiredRole .. "', Config hat aber role='" .. tostring(cfg.role) .. "'")

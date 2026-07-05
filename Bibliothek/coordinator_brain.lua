@@ -46,12 +46,66 @@ function M.new(cfg)
     self.reports = {}
     self.currentCommand = nil
     self.currentReport = nil
+    self.draftCommand = nil
     self.status = "bereit"
     self.standbyPlanned = false
     self.warnings = {}
     self.warningTimes = {}
     self.coordinatorNav = { ready = nil, error = nil }
     return self
+end
+
+function Brain:updateAbbauDraft(update)
+    local kind = update.updateKind or update.part
+    if kind == "start" or not self.draftCommand then
+        local id = update.commandId or update.request_id or protocol.requestId()
+        self.draftCommand = {
+            id = id,
+            kind = "abbau",
+            payload = {},
+            createdAt = now(),
+            updatedAt = now(),
+        }
+        local draftReport = reportLib.start(id, "abbau_draft", { from = update.from })
+        self.reports[id] = draftReport
+        reportLib.event(draftReport, "draft_started", update)
+    end
+
+    local draft = self.draftCommand
+    draft.updatedAt = now()
+    if kind == "ecke1" or kind == "von" or kind == "p1" then draft.payload.p1 = update.pos or update.p1
+    elseif kind == "ecke2" or kind == "bis" or kind == "p2" then draft.payload.p2 = update.pos or update.p2
+    elseif kind == "lager" or kind == "chest" then draft.payload.chest = update.pos or update.chest
+    elseif kind == "start" then
+        -- Nur Draft anlegen.
+    else
+        self:warn("abbau_draft", "Unbekannter Abbau-Draft-Teil: " .. tostring(kind), update)
+    end
+
+    local report = self.reports[draft.id]
+    if report then
+        reportLib.event(report, "draft_updated", { part = kind, payload = draft.payload, update = update })
+        reportLib.save(self.cfg.reportDir or "berichte", report)
+    end
+
+    if draft.payload.p1 and draft.payload.p2 and draft.payload.chest then
+        local command = {
+            request_id = draft.id,
+            command = "abbau",
+            chest = draft.payload.chest,
+            p1 = draft.payload.p1,
+            p2 = draft.payload.p2,
+            from = update.from,
+        }
+        self:addPocketCommand(command)
+        if report then
+            reportLib.event(report, "draft_completed", command)
+            reportLib.save(self.cfg.reportDir or "berichte", report)
+        end
+        self.draftCommand = nil
+        return "queued", command
+    end
+    return "draft", draft
 end
 
 function Brain:knownWorkerSummary()
@@ -317,7 +371,9 @@ local function startAbbau(self, command)
     local payload = command.payload
     local area = vec3.normalizeBox(payload.p1, payload.p2)
     self.currentCommand = command
-    self.currentReport = reportLib.start(command.id, "abbau", payload)
+    self.currentReport = self.reports[command.id] or reportLib.start(command.id, "abbau", payload)
+    self.currentReport.command = { kind = "abbau", payload = payload }
+    self.currentReport.status = "running"
     self.reports[command.id] = self.currentReport
     reportLib.event(self.currentReport, "command_started", { area = area, lager = payload.chest })
     self:planHighestPointSearch(area)
@@ -470,6 +526,7 @@ function Brain:statusSnapshot()
         commandQueue = taskQueue.list(self.commandQueue),
         subtaskQueue = taskQueue.list(self.subtaskQueue),
         currentCommand = self.currentCommand,
+        draftCommand = self.draftCommand,
         currentReport = self.currentReport and self.currentReport.id or nil,
         warnings = self.warnings,
         navReady = self.coordinatorNav.ready,

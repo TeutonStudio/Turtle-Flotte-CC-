@@ -4,6 +4,8 @@
 local DEFAULT_PREFIX = "teuton_fleet_v2"
 
 local function loadPocketConfig()
+    local okFlotte, flotteCfg = pcall(require, "Flotte.fleet_pocket_config")
+    if okFlotte and type(flotteCfg) == "table" then return flotteCfg end
     local ok, cfg = pcall(require, "fleet_pocket_config")
     if ok and type(cfg) == "table" then return cfg end
     return { group = "bergwerk_01", coordinator = "basis_01", protocolPrefix = DEFAULT_PREFIX, timeout = 60 }
@@ -81,6 +83,13 @@ local function printStatus(status)
     print("Status: " .. tostring(status.status))
     print("Nav: " .. tostring(status.navReady) .. (status.navError and (" | " .. tostring(status.navError)) or ""))
     if status.currentCommand then print("Aktueller Befehl: " .. tostring(status.currentCommand.kind) .. " | " .. tostring(status.currentCommand.id)) end
+    if status.draftCommand then
+        local p = status.draftCommand.payload or {}
+        print("Abbau-Draft: " .. tostring(status.draftCommand.id) ..
+            " | Ecke1 " .. vecString(p.p1) ..
+            " | Ecke2 " .. vecString(p.p2) ..
+            " | Lager " .. vecString(p.chest))
+    end
     if status.currentReport then print("Aktueller Report: " .. tostring(status.currentReport)) end
     if status.warnings and #status.warnings > 0 then
         print("Warnungen:")
@@ -116,6 +125,10 @@ local function usage()
     print("  flotte status")
     print("  flotte abbau <lager:x,y,z> <von:x,y,z> <bis:x,y,z>")
     print("  flotte abbau lager <lager:x,y,z> von <von:x,y,z> bis <bis:x,y,z>")
+    print("  flotte abbau start")
+    print("  flotte abbau ecke1 <x,y,z>")
+    print("  flotte abbau ecke2 <x,y,z>")
+    print("  flotte abbau lager <x,y,z>")
     print("  flotte stop")
     print("  flotte standby")
 end
@@ -153,7 +166,29 @@ elseif cmd == "status" then
     if msg then printStatus(msg.status) end
 elseif cmd == "abbau" then
     local chest, p1, p2
-    if args[2] == "lager" and args[4] == "von" and args[6] == "bis" then
+    if args[2] == "start" then
+        local msg = sendCommand("abbau_part", { updateKind = "start" })
+        if msg then print(tostring(msg.message or msg.error or msg.kind)) end
+        return
+    elseif args[2] == "ecke1" or args[2] == "von" then
+        local pos = parseVec(args[3])
+        if not pos then usage(); return end
+        local msg = sendCommand("abbau_part", { updateKind = "ecke1", pos = pos })
+        if msg then print(tostring(msg.message or msg.error or msg.kind)) end
+        return
+    elseif args[2] == "ecke2" or args[2] == "bis" then
+        local pos = parseVec(args[3])
+        if not pos then usage(); return end
+        local msg = sendCommand("abbau_part", { updateKind = "ecke2", pos = pos })
+        if msg then print(tostring(msg.message or msg.error or msg.kind)) end
+        return
+    elseif args[2] == "lager" and args[4] == nil then
+        local pos = parseVec(args[3])
+        if not pos then usage(); return end
+        local msg = sendCommand("abbau_part", { updateKind = "lager", pos = pos })
+        if msg then print(tostring(msg.message or msg.error or msg.kind)) end
+        return
+    elseif args[2] == "lager" and args[4] == "von" and args[6] == "bis" then
         chest = parseVec(args[3]); p1 = parseVec(args[5]); p2 = parseVec(args[7])
     else
         chest = parseVec(args[2]); p1 = parseVec(args[3]); p2 = parseVec(args[4])

@@ -18,6 +18,7 @@ Die Hauptprogramme sind duenn:
 - `Skripte/worker.lua` startet `worker_runtime.lua`.
 - Alte Starter wie `worker_bergbau.lua` bleiben kompatibel, geben eine Deprecated-Warnung aus und starten intern `worker.lua`.
 - `Skripte/flotte.lua` ist die Taschencomputer-CLI.
+- Koordinator und Worker sind oekonomische Agenten: sie zeigen lokal ihre aktuelle Aufgabe und die naechsten offenen Aufgaben an.
 
 Neue Standardbibliotheken:
 
@@ -41,6 +42,7 @@ Neue Standardbibliotheken:
 - `turtle.getEquippedRight()`
 
 Falls die API in der Laufzeit fehlt, startet der Worker trotzdem. Der Beruf ist dann `unbekannt` und der Status enthaelt eine Warnung.
+Wenn die Config noch `profession` oder `workerRole` enthaelt, nutzt der Worker das als Fallback. In der Minimal-Config steht beim Worker aber nur `group`.
 
 Erkennung:
 
@@ -103,7 +105,13 @@ Pocket-Befehl:
 ```text
 flotte abbau 100,64,200 90,67,190 110,80,210
 flotte abbau lager 100,64,200 von 90,67,190 bis 110,80,210
+flotte abbau start
+flotte abbau ecke1 90,67,190
+flotte abbau ecke2 110,80,210
+flotte abbau lager 100,64,200
 ```
+
+Die mehrteilige Variante legt zuerst einen Abbau-Draft an. Jede Ueberarbeitung vom Taschencomputer wird als `draft_updated` im Report gespeichert. Sobald Ecke 1, Ecke 2 und Lager-Truhe bekannt sind, reiht der Koordinator den echten Abbau-Befehl ein.
 
 Ablauf:
 
@@ -149,16 +157,16 @@ Worker:
 
 ```text
 wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
-init worker bergwerk_01 worker_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
+init worker bergwerk_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
 
 Alte Rollen bleiben Alias fuer Worker:
 
 ```text
-init bergbau bergwerk_01 worker_bergbau_01 basis_01
-init graben bergwerk_01 worker_graben_01 basis_01
-init holzfaeller bergwerk_01 worker_holz_01 basis_01
-init handwerk bergwerk_01 worker_handwerk_01 basis_01
+init bergbau bergwerk_01
+init graben bergwerk_01
+init holzfaeller bergwerk_01
+init handwerk bergwerk_01
 ```
 
 Taschencomputer:
@@ -167,6 +175,16 @@ Taschencomputer:
 wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init_flotte.lua
 init_flotte pocket bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
 ```
+
+Auf dem Taschencomputer liegen alle heruntergeladenen Dateien unter `Flotte/`. Der Init legt zusaetzlich einen kleinen `flotte`-Starter im Root an.
+
+## Update
+
+```text
+update
+```
+
+Der Updater loescht alte Programmdateien und laedt die aktuelle Rollen-Dateiliste neu. Config-Dateien bleiben erhalten. Auf dem Taschencomputer aktualisiert er `Flotte/update.lua` und `Flotte/flotte.lua`.
 
 ## Config-Minimierung
 
@@ -177,7 +195,6 @@ Pflicht:
 Optional:
 
 - `id`, sonst `os.getComputerID()`
-- `coordinator` beim Worker
 - `initChest`, wenn der Koordinator sie nicht automatisch/zuverlaessig bestimmen kann
 - `protocolPrefix`
 - `start` und `facing`, falls GPS/Facing-Kalibrierung nicht reicht
@@ -197,6 +214,10 @@ flotte list
 flotte status
 flotte abbau <lager:x,y,z> <von:x,y,z> <bis:x,y,z>
 flotte abbau lager <lager:x,y,z> von <von:x,y,z> bis <bis:x,y,z>
+flotte abbau start
+flotte abbau ecke1 <x,y,z>
+flotte abbau ecke2 <x,y,z>
+flotte abbau lager <x,y,z>
 flotte stop
 flotte standby
 ```

@@ -4,8 +4,8 @@
 local DEFAULT_BASE_URL = "https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master"
 local VERSION = "5.0.0"
 
-local function lib(name) return { src = "Bibliothek/" .. name, dst = name } end
-local function script(name) return { src = "Skripte/" .. name, dst = name } end
+local function lib(name, dstDir) return { src = "Bibliothek/" .. name, dst = (dstDir and (dstDir .. "/") or "") .. name } end
+local function script(name, dstDir) return { src = "Skripte/" .. name, dst = (dstDir and (dstDir .. "/") or "") .. name } end
 
 local COMMON_V5 = {
     lib("fleet_common.lua"),
@@ -43,19 +43,21 @@ local ROLE_FILES = {
     handwerk = WORKER_FILES,
     holzfaeller = WORKER_FILES,
     pocket = {
-        { src = "update.lua", dst = "update" },
-        script("flotte.lua"),
+        { src = "update.lua", dst = "Flotte/update.lua" },
+        script("flotte.lua", "Flotte"),
     },
 }
 
 local function usage()
     print("init koordinator <gruppe> [id] [base_url]")
-    print("init worker <gruppe> [id] [koordinator] [base_url]")
-    print("init <bergbau|graben|handwerk|holzfaeller> <gruppe> [id] [koordinator] [base_url]")
+    print("init worker <gruppe> [base_url]")
+    print("init <bergbau|graben|handwerk|holzfaeller> <gruppe> [base_url]")
     print("init pocket <gruppe> <koordinator> [base_url]")
 end
 
 local function write(path, content)
+    local dir = fs.getDir(path)
+    if dir and dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
     local h = fs.open(path, "w")
     h.write(content)
     h.close()
@@ -77,6 +79,8 @@ local function download(baseUrl, file)
     local src = type(file) == "table" and file.src or file
     local dst = type(file) == "table" and file.dst or file
     local url = baseUrl:gsub("/$", "") .. "/" .. src
+    local dir = fs.getDir(dst)
+    if dir and dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
     if fs.exists(dst) then fs.delete(dst) end
     print("Lade " .. src .. " -> " .. dst)
     local ok = shell.run("wget", url, dst)
@@ -114,14 +118,7 @@ local function configFor(role, group, id, coordinator)
 
     return string.format([[return {
     group = %s,
-    id = %s,
-    role = "worker",
-    coordinator = %s,
-    protocolPrefix = "teuton_fleet_v2",
-    statusInterval = 5,
-    start = nil,
-    facing = nil,
-}]], literal(group), literal(id or tostring(os.getComputerID())), literal(coordinator))
+}]], literal(group))
 end
 
 local args = { ... }
@@ -140,14 +137,16 @@ elseif role == "pocket" then
     baseUrl = args[4] or DEFAULT_BASE_URL
     if not coordinator then usage(); return end
 elseif role == "worker" or role == "bergbau" or role == "graben" or role == "handwerk" or role == "holzfaeller" then
-    baseUrl = args[5] or DEFAULT_BASE_URL
+    id = nil
+    coordinator = nil
+    baseUrl = args[3] or DEFAULT_BASE_URL
 end
 
 print("Teuton-Fleet Init " .. VERSION .. " fuer " .. role)
 for _, file in ipairs(ROLE_FILES[role]) do download(baseUrl, file) end
 
 if role == "pocket" then
-    writeConfig("fleet_pocket_config.lua", configFor(role, group, id, coordinator))
+    writeConfig("Flotte/fleet_pocket_config.lua", configFor(role, group, id, coordinator))
 else
     writeConfig("fleet_config.lua", configFor(role == "koordinator" and role or "worker", group, id, coordinator))
 end
@@ -156,6 +155,8 @@ if role == "koordinator" then
     write("startup.lua", 'shell.run("koordinator")\n')
 elseif role ~= "pocket" then
     write("startup.lua", 'shell.run("worker")\n')
+else
+    write("flotte", 'shell.run("Flotte/flotte.lua", ...)\n')
 end
 
 print("Init fertig. v5 minimiert Config: group ist Pflicht, id/initChest/start/facing sind optional soweit automatisch ermittelbar.")

@@ -49,6 +49,21 @@ local function handlePocket(sender, msg)
         local tickOk, tickErr = pcall(function() brain:tick() end)
         if not tickOk then brain:warn("pocket_tick", "Brain-Tick nach Pocket-Befehl fehlgeschlagen: " .. tostring(tickErr)) end
         reply(sender, msg.request_id, "coordinator_report", { message = "Abbau-Befehl eingereiht", status = brain:statusSnapshot() })
+    elseif msg.command == "abbau_part" then
+        local state, data = brain:updateAbbauDraft({
+            request_id = msg.commandId or msg.request_id,
+            commandId = msg.commandId,
+            updateKind = msg.updateKind,
+            pos = msg.pos,
+            p1 = msg.p1,
+            p2 = msg.p2,
+            chest = msg.chest,
+            from = msg.from,
+        })
+        local tickOk, tickErr = pcall(function() brain:tick() end)
+        if not tickOk then brain:warn("pocket_tick", "Brain-Tick nach Abbau-Teil fehlgeschlagen: " .. tostring(tickErr)) end
+        local message = state == "queued" and "Abbau-Draft komplett, Befehl eingereiht" or "Abbau-Draft aktualisiert"
+        reply(sender, msg.request_id, "coordinator_report", { message = message, draft = data, status = brain:statusSnapshot() })
     elseif msg.command == "stop" then
         brain:addPocketCommand({ request_id = msg.request_id, command = "stop" })
         reply(sender, msg.request_id, "coordinator_report", { message = "Stop eingereiht", status = brain:statusSnapshot() })
@@ -203,10 +218,12 @@ local function displayLoop()
             local status = brain:statusSnapshot()
             term.clear()
             term.setCursorPos(1, 1)
-            print("Koordinator " .. tostring(status.id) .. " | " .. tostring(status.status))
+            print("Agent Koordinator " .. tostring(status.id) .. " | " .. tostring(status.status))
             print("Nav: " .. tostring(status.navReady) .. (status.navError and (" | " .. tostring(status.navError)) or ""))
             if status.currentCommand then
                 print("Aktuell: " .. tostring(status.currentCommand.kind) .. " " .. tostring(status.currentCommand.id))
+            elseif status.draftCommand then
+                print("Draft: " .. tostring(status.draftCommand.id))
             else
                 print("Aktuell: -")
             end
