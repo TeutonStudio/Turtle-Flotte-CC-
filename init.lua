@@ -3,30 +3,30 @@
 -- danach laedt es die benoetigten Rollen-Dateien nach.
 
 local DEFAULT_BASE_URL = "https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master"
-local VERSION = "4.0.0"
+local VERSION = "4.1.0"
 
 local function lib(name) return { src = "Bibliothek/" .. name, dst = name } end
 local function script(name) return { src = "Skripte/" .. name, dst = name } end
 
 local ROLE_FILES = {
     koordinator = {
-        lib("fleet_common.lua"), lib("nav.lua"), script("koordinator.lua"),
+        { src = "update.lua", dst = "update" }, lib("fleet_common.lua"), lib("nav.lua"), script("koordinator.lua"),
     },
     bergbau = {
-        lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_bergbau.lua"),
+        { src = "update.lua", dst = "update" }, lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_bergbau.lua"),
     },
     graben = {
-        lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_graben.lua"),
+        { src = "update.lua", dst = "update" }, lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_graben.lua"),
     },
     handwerk = {
-        lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_handwerk.lua"),
+        { src = "update.lua", dst = "update" }, lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_handwerk.lua"),
         lib("recipes.lua"), lib("crafting_lib.lua"),
     },
     holzfaeller = {
-        lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_holzfaeller.lua"),
+        { src = "update.lua", dst = "update" }, lib("fleet_common.lua"), lib("nav.lua"), lib("worker_core.lua"), script("worker_holzfaeller.lua"),
     },
     pocket = {
-        script("flotte.lua"),
+        { src = "update.lua", dst = "update" }, script("flotte.lua"),
     },
 }
 
@@ -86,10 +86,10 @@ local function configFor(role, group, id, coordinator)
     id = %q,
     role = "coordinator",
     protocolPrefix = "teuton_fleet_v2",
-    chestSide = "front",
-    deploySide = "right",
-    deploySides = { "right", "left", "back", "top" },
-    deployCount = 4,
+    chestSide = "back",
+    deploySide = "left",
+    deploySides = { "left", "right", "front" },
+    deployCount = 3,
     deployPause = 1.5,
     deployWait = 8,
     autoDeploy = true,

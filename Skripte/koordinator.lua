@@ -35,6 +35,8 @@ local state = {
 }
 
 local reports = {}
+local DEFAULT_DEPLOY_SIDES = { "left", "right", "front" }
+local LEGACY_DEPLOY_SIDES = { "right", "left", "back", "top" }
 
 local function log(text)
     state.progress = text
@@ -283,8 +285,40 @@ local function countFuelInInventory()
     return count
 end
 
+local function sameList(a, b)
+    if type(a) ~= "table" or #a ~= #b then return false end
+    for i = 1, #b do
+        if a[i] ~= b[i] then return false end
+    end
+    return true
+end
+
+local function copyList(list)
+    local copy = {}
+    for i = 1, #list do copy[i] = list[i] end
+    return copy
+end
+
+local function usesLegacyDeployLayout()
+    return sameList(cfg.deploySides, LEGACY_DEPLOY_SIDES)
+end
+
+local function deploySides()
+    if usesLegacyDeployLayout() then return copyList(DEFAULT_DEPLOY_SIDES) end
+    if cfg.deploySides and #cfg.deploySides > 0 then return cfg.deploySides end
+    if cfg.deploySide then return { cfg.deploySide } end
+    return copyList(DEFAULT_DEPLOY_SIDES)
+end
+
+local function deployCount()
+    local count = cfg.deployCount or #(cfg.workers or {})
+    if usesLegacyDeployLayout() and count == 4 then count = #DEFAULT_DEPLOY_SIDES end
+    if count <= 0 then count = 1 end
+    return count
+end
+
 local function configuredWorkerCount()
-    local byConfig = cfg.deployCount or #(cfg.workers or {})
+    local byConfig = deployCount()
     if byConfig and byConfig > 0 then return byConfig end
     local count = 0
     for _ in pairs(workers) do count = count + 1 end
@@ -402,13 +436,8 @@ local function fuelPlacedWorker(side)
     return dropped
 end
 
-local function deploySides()
-    if cfg.deploySides and #cfg.deploySides > 0 then return cfg.deploySides end
-    return { cfg.deploySide or "right" }
-end
-
 local function deployOne(label, side)
-    side = side or (cfg.deploySide or "right")
+    side = side or deploySides()[1]
     if detectTo(side) then
         local okInspect, data = inspectTo(side)
         local blockName = okInspect and data and data.name or "unbekannt"
@@ -519,8 +548,7 @@ local function deployUntilRole(role)
 end
 
 local function deployAll()
-    local count = cfg.deployCount or #(cfg.workers or {})
-    if count <= 0 then count = 1 end
+    local count = deployCount()
 
     local sides = deploySides()
     local deployed = 0

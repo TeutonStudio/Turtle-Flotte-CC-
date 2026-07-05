@@ -5,23 +5,23 @@ return {
     role = "coordinator",
     protocolPrefix = "teuton_fleet_v2",
 
-    -- Der Koordinator steht direkt vor der persoenlichen Truhe und schaut sie an.
-    chestSide = "front",
+    -- Der Koordinator hat die persoenliche Truhe hinter sich und platziert Worker links/rechts/vorn.
+    chestSide = "back",
     -- GPS-Startdaten fuer Servicefahrten nach dem Initialisieren.
     -- initChest ist die Koordinate der persoenlichen/Init-Truhe.
     start = nil, -- Beispiel: { x = 789, y = 64, z = -967 }
     facing = nil, -- "north", "east", "south" oder "west"
     initChest = nil, -- Beispiel: { x = 789, y = 64, z = -968 }
 
-    -- Wohin Worker platziert werden. front geht NICHT, wenn dort die Truhe steht.
+    -- Wohin Worker platziert werden. Die Reihenfolge bleibt am Depot stehen.
     -- Bei Auto-Deploy wird die Liste der Reihe nach probiert.
-    deploySide = "right", -- alter Einzelwert, bleibt als Fallback nutzbar
-    deploySides = { "right", "left", "back", "top" },
+    deploySide = "left", -- alter Einzelwert, bleibt als Fallback nutzbar
+    deploySides = { "left", "right", "front" },
 
-    -- In der Truhe liegen vier vorbereitete, beschriftete Turtles.
+    -- In der Truhe liegen vorbereitete, beschriftete Turtles.
     -- Auto-Deploy zieht so lange Turtles aus der Truhe und platziert sie auf freien deploySides,
     -- bis die benoetigte Rolle online ist. Deshalb ist die Reihenfolge nicht kritisch.
-    deployCount = 4,
+    deployCount = 3,
     deployPause = 1.5,
     deployWait = 8,
     autoDeploy = true,

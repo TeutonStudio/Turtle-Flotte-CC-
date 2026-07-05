@@ -3,7 +3,7 @@
 
 local M = {}
 
-M.VERSION = "4.0.0"
+M.VERSION = "4.1.0"
 
 local function safeCopyValue(value, stack)
     local valueType = type(value)
