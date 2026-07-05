@@ -250,16 +250,6 @@ local function returnSlotToChest(slot)
     return dropTo(cfg.chestSide or "front")
 end
 
-local function returnNonFuelNonTurtleToChest()
-    for i = 1, 16 do
-        local d = turtle.getItemDetail(i)
-        if d and not isFuelSlot(i) and not isTurtleItem(d) then
-            returnSlotToChest(i)
-        end
-    end
-    turtle.select(1)
-end
-
 local function returnNonFuelToChest()
     for i = 1, 16 do
         local d = turtle.getItemDetail(i)
@@ -346,13 +336,24 @@ local function pullFuelFromChest(minItems)
     local chestSide = cfg.chestSide or "front"
     local limit = cfg.fuelSearchPullLimit or cfg.searchPullLimit or 24
     local before = countFuelInInventory()
+    local heldNonFuel = false
 
     for _ = 1, limit do
         if countFuelInInventory() - before >= minItems then break end
         local ok = suckFrom(chestSide, 1)
         if not ok then break end
-        returnNonFuelToChest()
+        for slot = 1, 16 do
+            local detail = turtle.getItemDetail(slot)
+            if detail and not isFuelSlot(slot) then
+                heldNonFuel = true
+                break
+            end
+        end
     end
+
+    -- Keep accidental depot items in inventory during the search so the next suck
+    -- can reach later chest slots instead of pulling the same turtle forever.
+    if heldNonFuel then returnNonFuelToChest() end
 
     local pulled = countFuelInInventory() - before
     if pulled < minItems then warnLowFuelBuffer(countFuelInInventory()) end
@@ -392,10 +393,10 @@ local function fuelPlacedWorker(side)
     if not cfg.keepFuelInCoordinator then
         for i = 1, 16 do
             local d = turtle.getItemDetail(i)
-            if d and not isTurtleItem(d) then returnSlotToChest(i) end
+            if d then returnSlotToChest(i) end
         end
     else
-        returnNonFuelNonTurtleToChest()
+        returnNonFuelToChest()
     end
 
     return dropped

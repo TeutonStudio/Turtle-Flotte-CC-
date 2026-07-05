@@ -3,7 +3,7 @@
 -- danach laedt es die benoetigten Rollen-Dateien nach.
 
 local DEFAULT_BASE_URL = "https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master"
-local VERSION = "3.0.0"
+local VERSION = "4.0.0"
 
 local function lib(name) return { src = "Bibliothek/" .. name, dst = name } end
 local function script(name) return { src = "Skripte/" .. name, dst = name } end
