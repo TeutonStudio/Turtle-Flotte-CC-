@@ -197,6 +197,9 @@ local function calibrateHeading()
     print("Heading aus Konfiguration: " .. heading)
     return true
   end
+  if not config.autoCalibrateHeading then
+    return false, "Koordinator heading fehlt. Bitte koordinator/config.lua mit heading=\"north|south|east|west\" anlegen."
+  end
   if not hasFuelForMove() then
     return false, "Koordinator hat keinen Fuel fuer Heading-Kalibrierung; fuel=" .. fuelLevelText()
   end
@@ -238,11 +241,30 @@ local function suckFromSide(side)
   return ok
 end
 
+local function inventoryFull()
+  for slot = 1, 16 do
+    if turtle.getItemCount(slot) == 0 then return false end
+  end
+  return true
+end
+
 function deploy.suckFromChest()
   if not turtle then return false, "Turtle API fehlt" end
   local side = config.chestSide or deploy.DEFAULT_CHEST_SIDE
-  for _ = 1, 16 do suckFromSide(side) end
-  return true
+  print("InitTruhe-Seite: " .. tostring(side))
+  local successes = 0
+  local misses = 0
+  while successes + misses < 16 and not inventoryFull() do
+    local ok = suckFromSide(side)
+    if ok then
+      successes = successes + 1
+      misses = 0
+    else
+      misses = misses + 1
+      if misses >= 2 then break end
+    end
+  end
+  return successes
 end
 
 local function moveForwardOrFail(context)
@@ -291,10 +313,17 @@ end
 
 function deploy.auspacken(benoetigt)
   if not turtle then return {}, "Turtle API fehlt" end
-  deploy.suckFromChest()
-  deploy.refuelFromInventory()
   local headingOk, headingErr = calibrateHeading()
   if not headingOk then print(headingErr); return {}, headingErr end
+  deploy.suckFromChest()
+  deploy.refuelFromInventory()
+  local hasWorker = selectWorkerItem()
+  local hasFuel = selectFuelItem()
+  if not hasWorker and not hasFuel then
+    local err = "Aus InitTruhe wurden keine Worker/Fuel-Items aufgenommen. Pruefe chestSide in koordinator/config.lua."
+    print(err)
+    return {}, err
+  end
   local placed = {}
   while #placed < (benoetigt or 1) do
     local okL, posL, errL = placeWorkerLeft()

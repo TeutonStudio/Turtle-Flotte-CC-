@@ -66,6 +66,27 @@ local function safeDelete(path)
   return false
 end
 
+local function preservePaths(paths)
+  local saved = {}
+  for _, path in ipairs(paths or {}) do
+    if type(path) == "string" and fs.exists(path) then
+      local data = nil
+      local h = fs.open(path, "r")
+      if h then data = h.readAll(); h.close() end
+      saved[#saved + 1] = { path = path, data = data }
+    end
+  end
+  return saved
+end
+
+local function restorePaths(saved)
+  for _, item in ipairs(saved or {}) do
+    if item.data ~= nil then
+      writeFile(item.path, item.data)
+    end
+  end
+end
+
 local function removePocketStartupIfManaged()
   if not fs.exists("startup.lua") then return false end
   local h = fs.open("startup.lua", "r")
@@ -117,6 +138,7 @@ function core.run(role)
   local cfg = manifest.update and manifest.update[role] or {}
   print("Flotte-Update fuer Rolle: " .. role)
 
+  local preserved = preservePaths(cfg.preserve)
   local removed = 0
   for _, path in ipairs(cfg.managed or {}) do
     if safeDelete(path) then removed = removed + 1 end
@@ -132,6 +154,7 @@ function core.run(role)
     downloaded = downloaded + 1
     print("Geladen: " .. tostring(src) .. " -> " .. tostring(dest))
   end
+  restorePaths(preserved)
 
   local startupOk, startupMsg = core.applyStartup(manifest, role)
   if not startupOk then print(startupMsg); return false end
