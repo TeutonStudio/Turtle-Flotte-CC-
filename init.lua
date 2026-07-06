@@ -1,162 +1,83 @@
--- init.lua
--- Bootstrap fuer Teuton-Fleet v5.
+-- Zweck: Einmaliger Bootstrap-Installer fuer eine Flotte-Rolle.
+-- Erwartet: http, fs, textutils, shell, os; RAW_BASE_URL/MANIFEST_URL muessen angepasst werden.
 
-local DEFAULT_BASE_URL = "https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master"
-local VERSION = "5.0.0"
+local init = {}
 
-local function lib(name, dstDir) return { src = "Bibliothek/" .. name, dst = (dstDir and (dstDir .. "/") or "") .. name } end
-local function script(name, dstDir) return { src = "Skripte/" .. name, dst = (dstDir and (dstDir .. "/") or "") .. name } end
+init.RAW_BASE_URL = "https://github.com/TeutonStudio/Turtle-Flotte-CC-"
+init.MANIFEST_URL = init.RAW_BASE_URL .. "manifest.json"
 
-local COMMON_V5 = {
-    lib("fleet_common.lua"),
-    lib("vec3.lua"),
-    lib("direction.lua"),
-    lib("equipment.lua"),
-    lib("inventory.lua"),
-    lib("task_queue.lua"),
-    lib("protocol.lua"),
-    lib("nav2.lua"),
-    lib("safety.lua"),
-}
-
-local WORKER_FILES = {
-    { src = "update.lua", dst = "update" },
-    COMMON_V5[1], COMMON_V5[2], COMMON_V5[3], COMMON_V5[4], COMMON_V5[5],
-    COMMON_V5[6], COMMON_V5[7], COMMON_V5[8], COMMON_V5[9],
-    lib("worker_runtime.lua"),
-    script("worker.lua"),
-}
-
-local ROLE_FILES = {
-    koordinator = {
-        { src = "update.lua", dst = "update" },
-        COMMON_V5[1], COMMON_V5[2], COMMON_V5[3], COMMON_V5[4], COMMON_V5[5],
-        COMMON_V5[6], COMMON_V5[7], COMMON_V5[8], COMMON_V5[9],
-        lib("terrain.lua"),
-        lib("report.lua"),
-        lib("coordinator_brain.lua"),
-        script("koordinator.lua"),
-    },
-    worker = WORKER_FILES,
-    bergbau = WORKER_FILES,
-    graben = WORKER_FILES,
-    handwerk = WORKER_FILES,
-    holzfaeller = WORKER_FILES,
-    pocket = {
-        { src = "update.lua", dst = "Flotte/update.lua" },
-        script("flotte.lua", "Flotte"),
-    },
-}
-
-local function usage()
-    print("init koordinator <gruppe> [id] [base_url]")
-    print("init worker <gruppe> [base_url]")
-    print("init <bergbau|graben|handwerk|holzfaeller> <gruppe> [base_url]")
-    print("init pocket <gruppe> <koordinator> [base_url]")
+local function get(url)
+  local ok, handleOrErr = pcall(http.get, url)
+  if not ok or not handleOrErr then return nil, "Download fehlgeschlagen: " .. tostring(url) end
+  local data = handleOrErr.readAll()
+  handleOrErr.close()
+  return data
 end
 
-local function write(path, content)
-    local dir = fs.getDir(path)
-    if dir and dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
-    local h = fs.open(path, "w")
-    h.write(content)
-    h.close()
+local function write(path, data)
+  local dir = fs.getDir(path)
+  if dir and dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
+  local h = fs.open(path, "w")
+  if not h then return false, "Kann Datei nicht schreiben: " .. path end
+  h.write(data or "")
+  h.close()
+  return true
 end
 
-local function writeConfig(path, content)
-    if not fs.exists(path) then
-        write(path, content)
-        print("Config geschrieben: " .. path)
-    else
-        local example = path:gsub("%.lua$", ".example.lua")
-        write(example, content)
-        print("Bestehende Config behalten: " .. path)
-        print("Neue Beispiel-Config geschrieben: " .. example)
-    end
+local function parseManifest(raw)
+  if textutils.unserializeJSON then
+    local ok, data = pcall(textutils.unserializeJSON, raw)
+    if ok and type(data) == "table" then return data end
+  end
+  local ok, data = pcall(textutils.unserialize, raw)
+  if ok and type(data) == "table" then return data end
+  return nil, "Manifest ist nicht lesbar"
 end
 
-local function download(baseUrl, file)
-    local src = type(file) == "table" and file.src or file
-    local dst = type(file) == "table" and file.dst or file
-    local url = baseUrl:gsub("/$", "") .. "/" .. src
-    local dir = fs.getDir(dst)
-    if dir and dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
-    if fs.exists(dst) then fs.delete(dst) end
-    print("Lade " .. src .. " -> " .. dst)
-    local ok = shell.run("wget", url, dst)
-    if not ok or not fs.exists(dst) then error("Download fehlgeschlagen: " .. url) end
+local function chooseRole()
+  print("[1] Taschencomputer")
+  print("[2] Koordinator")
+  print("[3] Arbeiter")
+  write("Rolle: ")
+  local choice = read()
+  if choice == "1" then return "taschencomputer" end
+  if choice == "2" then return "koordinator" end
+  if choice == "3" then return "arbeiter" end
+  return nil, "Ungueltige Auswahl"
 end
 
-local function configFor(role, group, id, coordinator)
-    local function literal(value)
-        if value == nil then return "nil" end
-        return string.format("%q", value)
-    end
-
-    if role == "koordinator" then
-        return string.format([[return {
-    group = %s,
-    id = %s,
-    role = "coordinator",
-    protocolPrefix = "teuton_fleet_v2",
-    statusInterval = 5,
-    reportDir = "berichte",
-    initChest = nil,
-    start = nil,
-    facing = nil,
-}]], literal(group), literal(id or "basis_" .. tostring(os.getComputerID())))
-    end
-
-    if role == "pocket" then
-        return string.format([[return {
-    group = %s,
-    coordinator = %s,
-    protocolPrefix = "teuton_fleet_v2",
-    timeout = 60,
-}]], literal(group), literal(coordinator))
-    end
-
-    return string.format([[return {
-    group = %s,
-}]], literal(group))
+local function installFile(path)
+  local data, err = get(init.RAW_BASE_URL .. path)
+  if not data then return false, err end
+  return write(path, data)
 end
 
-local args = { ... }
-local role = args[1]
-local group = args[2]
-if not role or not ROLE_FILES[role] or not group then usage(); return end
-
-local id = args[3]
-local coordinator = args[4]
-local baseUrl = args[5] or DEFAULT_BASE_URL
-
-if role == "koordinator" then
-    baseUrl = args[4] or DEFAULT_BASE_URL
-elseif role == "pocket" then
-    coordinator = args[3]
-    baseUrl = args[4] or DEFAULT_BASE_URL
-    if not coordinator then usage(); return end
-elseif role == "worker" or role == "bergbau" or role == "graben" or role == "handwerk" or role == "holzfaeller" then
-    id = nil
-    coordinator = nil
-    baseUrl = args[3] or DEFAULT_BASE_URL
+function init.install()
+  if not http or not http.get then print("HTTP API ist nicht aktiviert."); return false end
+  local raw, err = get(init.MANIFEST_URL)
+  if not raw then print(err); return false end
+  local manifest, parseErr = parseManifest(raw)
+  if not manifest then print(parseErr); return false end
+  local role, roleErr = chooseRole()
+  if not role then print(roleErr); return false end
+  local files = {}
+  for _, path in ipairs(manifest.common or {}) do files[#files + 1] = path end
+  for _, path in ipairs((manifest.roles and manifest.roles[role]) or {}) do files[#files + 1] = path end
+  for _, path in ipairs(files) do
+    print("Lade " .. path)
+    local ok, fileErr = installFile(path)
+    if not ok then print(fileErr); return false end
+  end
+  local startupPath = manifest.startup and manifest.startup[role]
+  if not startupPath or not fs.exists(startupPath) then print("Startup-Datei fehlt im Manifest."); return false end
+  if fs.exists("startup.lua") then fs.delete("startup.lua") end
+  fs.copy(startupPath, "startup.lua")
+  print("Flotte installiert als Rolle: " .. role)
+  local running = shell and shell.getRunningProgram and shell.getRunningProgram()
+  if running and fs.exists(running) then fs.delete(running) end
+  os.reboot()
+  return true
 end
 
-print("Teuton-Fleet Init " .. VERSION .. " fuer " .. role)
-for _, file in ipairs(ROLE_FILES[role]) do download(baseUrl, file) end
-
-if role == "pocket" then
-    writeConfig("Flotte/fleet_pocket_config.lua", configFor(role, group, id, coordinator))
-else
-    writeConfig("fleet_config.lua", configFor(role == "koordinator" and role or "worker", group, id, coordinator))
-end
-
-if role == "koordinator" then
-    write("startup.lua", 'shell.run("koordinator")\n')
-elseif role ~= "pocket" then
-    write("startup.lua", 'shell.run("worker")\n')
-else
-    write("flotte", 'shell.run("Flotte/flotte.lua", ...)\n')
-end
-
-print("Init fertig. v5 minimiert Config: group ist Pflicht, id/initChest/start/facing sind optional soweit automatisch ermittelbar.")
+init.install()
+return init

@@ -1,243 +1,67 @@
-# Turtle-Flotte v5 fuer CC:Tweaked / ComputerCraft
+# Flotte
 
-v5 baut die Flotte generisch auf:
+Flotte ist ein v1-Repository fuer ein Multi-Turtle-Wirtschaftssystem in CC: Tweaked. Es trennt drei Rollen:
 
-- 1 Koordinator
-- n Arbeiter, n >= 1
-- 1 Taschencomputer fuer Befehle
+- Taschencomputer: Spieler-CLI und Rednet-Befehle.
+- Koordinator: sequentielle Job-Queue, Worker-Registry, Berichte, Treibstoff- und Lagerlogik.
+- Arbeiter: reine Ausfuehrung von Subtasks mit Problem-Meldungen fuer Treibstoff und volles Inventar.
 
-Arbeiter haben keine fest verdrahteten Rollenskripte mehr. Jeder Arbeiter startet `worker.lua`, erkennt seine Turtle-Upgrades und meldet daraus seinen Beruf.
+## Voraussetzungen
 
-Wichtig: Mit den zwei Slots des Arbeiters sind die Turtle-Upgrade-Slots gemeint, nicht Inventarslots. Jeder Arbeiter braucht ein Modem-Upgrade und ein Werkzeug-/Funktions-Upgrade.
+- Minecraft mit CC: Tweaked.
+- Funktionierende GPS-Infrastruktur.
+- HTTP API aktiviert und der Raw-Host des Repositories gewhitelistet.
+- Rednet-faehiges Ender-/Wireless-Modem an Taschencomputer, Koordinator und Arbeitern.
+- Koordinator optional als Turtle, wenn Auspacken/Einpacken und Lagerlogik physisch ausgefuehrt werden sollen.
+- Mekanism Personal Chest direkt hinter dem Koordinator, gemaess fester Referenzausrichtung.
+- Arbeiter-Turtles mit genau einem passenden Werkzeug: Schaufel, Spitzhacke, Axt oder Crafting/Werkbank-Turtle.
 
-## Architektur
+## Installation in CC:Tweaked
 
-Die Hauptprogramme sind duenn:
-
-- `Skripte/koordinator.lua` startet Rednet, `coordinator_brain.lua` und die Loops.
-- `Skripte/worker.lua` startet `worker_runtime.lua`.
-- Alte Starter wie `worker_bergbau.lua` bleiben kompatibel, geben eine Deprecated-Warnung aus und starten intern `worker.lua`.
-- `Skripte/flotte.lua` ist die Taschencomputer-CLI.
-- Koordinator und Worker sind oekonomische Agenten: sie zeigen lokal ihre aktuelle Aufgabe und die naechsten offenen Aufgaben an.
-
-Neue Standardbibliotheken:
-
-- `vec3.lua`, `direction.lua`: Koordinaten und Richtungsmathematik.
-- `equipment.lua`: liest ausgeruestete Turtle-Upgrades.
-- `inventory.lua`: Fuel, Slots und Itemzaehlung.
-- `task_queue.lua`: FIFO-TODO-Listen fuer Befehle und Worker-Aufgaben.
-- `protocol.lua`: zentrale Rednet-Nachrichten.
-- `nav2.lua`: Navigation ohne automatisches Graben.
-- `safety.lua`: Sicherheitslogik gegen Herunterfallen.
-- `terrain.lua`: Terrainmodell und Abbauplanung.
-- `report.lua`: chronologische Reports mit Saldo.
-- `worker_runtime.lua`: universeller Worker.
-- `coordinator_brain.lua`: Koordinator-Planer.
-
-## Berufserkennung
-
-`equipment.lua` nutzt, falls vorhanden:
-
-- `turtle.getEquippedLeft()`
-- `turtle.getEquippedRight()`
-
-Falls die API in der Laufzeit fehlt, startet der Worker trotzdem. Der Beruf ist dann `unbekannt` und der Status enthaelt eine Warnung.
-Wenn die Config noch `profession` oder `workerRole` enthaelt, nutzt der Worker das als Fallback. In der Minimal-Config steht beim Worker aber nur `group`.
-
-Erkennung:
-
-- Upgrade-Name enthaelt `shovel` -> `graben`
-- Upgrade-Name enthaelt `pickaxe` -> `bergbau`
-- Upgrade-Name enthaelt `craft`, `crafting`, `workbench` oder `crafty` -> `handwerk`
-- Upgrade-Name enthaelt `axe`, aber nicht `pickaxe` -> `holzfaeller`
-- sonst -> `unbekannt`
-
-Der Koordinator ist verantwortlich, `aktion=true` nur an einen Arbeiter mit passendem Beruf zu senden. Der Arbeiter prueft nur, ob `requiredProfession` zu seinem Beruf passt.
-
-## Worker-TODO-Liste
-
-Jeder Worker haelt eine eigene FIFO-TODO-Liste. Der wichtigste Task ist `move_action`:
+Beispiel fuer einen frischen Computer, nachdem die URL in `init.lua` korrekt gehostet ist:
 
 ```lua
-{
-  wohin = { x = 10, y = 64, z = 20 },
-  aktion = false,
-  requiredProfession = nil,
-  requireSupport = true,
-}
+wget https://github.com/TeutonStudio/Turtle-Flotte-CC-/init.lua init.lua
+pastebin get <dein-init-pastebin-code> init.lua
+init.lua
 ```
 
-Semantik:
+Alternativ kannst du `init.lua` manuell anlegen, den Inhalt einfuegen und ausfuehren.
 
-- `aktion=false`: Worker laeuft exakt zu `wohin`, ohne zu graben.
-- `aktion=true`: Worker laeuft neben `wohin`, schaut zum Zielblock und baut ihn ab.
-- Bei falschem Beruf meldet der Worker `worker_task_failed` mit `wrong_profession`.
-- Bei Blockade meldet der Worker `worker_blocked` mit `pos`, `blockedPos` und `block`.
-- Bei Fuel `< 5` meldet der Worker `worker_need_fuel` und stoppt sicher.
-- Bei vollem Inventar meldet der Worker `worker_inventory_full` und stoppt sicher.
+## Erster Testlauf
 
-`nav2.lua` graebt nie automatisch. Graben passiert nur bei expliziten Aktions-Tasks.
-
-## Koordinator-Queues
-
-Der Koordinator-Brain haelt:
-
-- `commandQueue`: Pocket-Befehle.
-- `subtaskQueue`: konkrete Worker- oder Service-Aufgaben.
-- `terrain`: bekannte Bloecke, Luft, Blockaden und Support.
-- `reports`: chronologische Reports.
-
-Prioritaeten:
-
-1. `worker_need_fuel`
-2. `worker_inventory_full`
-3. `worker_blocked`
-4. laufende Scan-/Abbau-Subtasks
-5. neue Pocket-Commands
-6. Standby
-
-Blockaden werden im Terrainmodell gespeichert. Aus dem Blocknamen bestimmt der Koordinator den passenden Beruf und schickt einen passenden Worker mit `move_action` und `aktion=true`.
-
-## Abbau
-
-Pocket-Befehl:
-
-```text
-flotte abbau 100,64,200 90,67,190 110,80,210
-flotte abbau lager 100,64,200 von 90,67,190 bis 110,80,210
-flotte abbau start
-flotte abbau ecke1 90,67,190
-flotte abbau ecke2 110,80,210
-flotte abbau lager 100,64,200
-```
-
-Die mehrteilige Variante legt zuerst einen Abbau-Draft an. Jede Ueberarbeitung vom Taschencomputer wird als `draft_updated` im Report gespeichert. Sobald Ecke 1, Ecke 2 und Lager-Truhe bekannt sind, reiht der Koordinator den echten Abbau-Befehl ein.
-
-Ablauf:
-
-1. Befehl wird in die `commandQueue` eingetragen.
-2. Report startet.
-3. Bereich wird normalisiert.
-4. Highest-Point-Search wird als Subtasks geplant.
-5. Wenn der hoechste Punkt bekannt ist, plant der Koordinator Y-Schichten von `highest.y` bis `area.minY`.
-6. Jede Schicht wird von aussen nach innen geplant.
-7. Aussenpositionen werden nur mit `requireSupport=true` genutzt, damit Worker nicht blind nach aussen laufen und herunterfallen.
-8. Blockaden werden als Terraininformation genutzt und mit passendem Worker bearbeitet.
-9. Wenn alle Subtasks fertig sind, wird der Report gespeichert.
-
-## Standby
-
-Wenn keine Pocket-Befehle und keine Subtasks offen sind, plant der Koordinator Standby:
-
-- Worker zur Init-Truhe zurueckrufen.
-- Worker einzeln abbauen.
-- Worker in die Init-Truhe legen.
-- Lose Items in Lager/Init-Truhe sortieren.
-- Koordinator an/auf die Init-Truhe bewegen.
-- Status wird `standby`.
-
-Falls ein Worker nicht erreichbar ist, wird eine Warnung/Report-Ereignis erzeugt. Es wird nicht endlos gewartet.
-
-## Installation
-
-Repository-URL:
-
-```text
-https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
-```
-
-Koordinator:
-
-```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
-init koordinator bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
-```
-
-Worker:
-
-```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
-init worker bergwerk_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
-```
-
-Alte Rollen bleiben Alias fuer Worker:
-
-```text
-init bergbau bergwerk_01
-init graben bergwerk_01
-init holzfaeller bergwerk_01
-init handwerk bergwerk_01
-```
-
-Taschencomputer:
-
-```text
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init_flotte.lua
-init_flotte pocket bergwerk_01 basis_01 https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master
-```
-
-Auf dem Taschencomputer liegen alle heruntergeladenen Dateien unter `Flotte/`. Der Init legt zusaetzlich einen kleinen `flotte`-Starter im Root an.
-
-## Update
-
-```text
-update
-```
-
-Der Updater loescht alte Programmdateien und laedt die aktuelle Rollen-Dateiliste neu. Config-Dateien bleiben erhalten. Auf dem Taschencomputer aktualisiert er `Flotte/update.lua` und `Flotte/flotte.lua`.
-
-## Config-Minimierung
-
-Pflicht:
-
-- `group`
-
-Optional:
-
-- `id`, sonst `os.getComputerID()`
-- `initChest`, wenn der Koordinator sie nicht automatisch/zuverlaessig bestimmen kann
-- `protocolPrefix`
-- `start` und `facing`, falls GPS/Facing-Kalibrierung nicht reicht
-
-Automatisch ermittelt, soweit die Laufzeit es hergibt:
-
-- Worker-Beruf aus Turtle-Upgrades
-- Position per GPS
-- Facing per GPS-Bewegung
-- Worker-Discovery ueber `worker_hello`
-- Modem ueber Peripheral-/Rednet-Erkennung
-
-## Taschencomputer-Befehle
+1. Starte den Koordinator und notiere seine Computer-ID.
+2. Stelle sicher, dass der Koordinator Rednet offen hat und GPS funktioniert.
+3. Starte mindestens eine Arbeiter-Turtle mit Modem und Werkzeug.
+4. Starte den Taschencomputer.
+5. Suche Koordinatoren:
 
 ```text
 flotte list
-flotte status
-flotte abbau <lager:x,y,z> <von:x,y,z> <bis:x,y,z>
-flotte abbau lager <lager:x,y,z> von <von:x,y,z> bis <bis:x,y,z>
-flotte abbau start
-flotte abbau ecke1 <x,y,z>
-flotte abbau ecke2 <x,y,z>
-flotte abbau lager <x,y,z>
-flotte stop
-flotte standby
 ```
 
-`flotte status` zeigt:
+6. Lege einen kleinen Abbau-Job an:
 
-- Koordinatorstatus
-- `commandQueue`
-- `subtaskQueue`
-- aktueller Befehl
-- aktueller Report
-- Worker mit `id`, `profession`, Fuel, freien Slots, Position, Facing, Equipment und aktuellem Task
+```text
+flotte abbau id:12 lager:100,64,100 von:105,64,105 bis:107,62,107
+```
 
-## Reports
+`id:12` ist durch die echte Koordinator-ID zu ersetzen. `lager`, `von` und `bis` sind GPS-Koordinaten im Format `x,y,z`.
 
-Reports liegen standardmaessig unter `berichte/`.
+7. Status und Bericht abfragen:
 
-Sie enthalten:
+```text
+flotte status id:12
+flotte bericht id:12-1751800000000
+flotte bericht id:12-1751800000000 --voll
+```
 
-- chronologische Events
-- Command-Payload
-- Status
-- Saldo mit Fuel, Items, Worker-Tasks und Fehleranzahl
+Die Job-ID wird beim Anlegen ausgegeben und kodiert die Koordinator-ID als Praefix.
+
+## Hinweise zu v1
+
+- Ein Koordinator verarbeitet immer nur einen Job gleichzeitig.
+- Fehlgeschlagene Subtasks werden im Bericht vermerkt und nicht automatisch wiederholt.
+- GPS-Ausfaelle werden defensiv behandelt, aber es gibt keine alternative Navigation ohne GPS.
+- Kollisionsvermeidung zwischen Arbeitern ist auf getrennte Y-Schichten beschraenkt.
+- Die physische Koordinator-Navigation zum Einsammeln ist bewusst einfach gehalten und setzt ein kontrolliertes Dock-Layout voraus.

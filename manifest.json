@@ -1,0 +1,20 @@
+{
+  "common": ["common/protocol.lua", "common/vec3.lua", "common/util.lua"],
+  "roles": {
+    "taschencomputer": ["taschencomputer/cli.lua", "taschencomputer/startup.lua"],
+    "koordinator": [
+      "koordinator/queue.lua", "koordinator/workers.lua", "koordinator/deploy.lua",
+      "koordinator/economy.lua", "koordinator/reports.lua", "koordinator/jobs/abbau.lua", "koordinator/startup.lua"
+    ],
+    "arbeiter": [
+      "arbeiter/state.lua",
+      "arbeiter/beruf/schaufel.lua", "arbeiter/beruf/spitzhacke.lua", "arbeiter/beruf/axt.lua", "arbeiter/beruf/werkbank.lua",
+      "arbeiter/startup.lua"
+    ]
+  },
+  "startup": {
+    "taschencomputer": "taschencomputer/startup.lua",
+    "koordinator": "koordinator/startup.lua",
+    "arbeiter": "arbeiter/startup.lua"
+  }
+}
