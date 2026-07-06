@@ -114,13 +114,6 @@ local function frontBlocked()
   return false
 end
 
-local function gpsPositionOrNil()
-  if not gps or not gps.locate then return nil end
-  local ok, x, y, z = pcall(gps.locate, 2)
-  if ok and x then return { x = math.floor(x + 0.5), y = math.floor(y + 0.5), z = math.floor(z + 0.5) } end
-  return nil
-end
-
 local function placeWorkerForward()
   local okWorker, workerErr = selectWorkerItem()
   if not okWorker then return false, nil, workerErr end
@@ -154,9 +147,9 @@ function deploy.auspacken(benoetigt)
     return {}, err
   end
 
-  local ok, dockPos, err = placeWorkerForward()
+  local ok, _, err = placeWorkerForward()
   if not ok then print(err); return {}, err end
-  return { dockPos or gpsPositionOrNil() }
+  return {}
 end
 
 function deploy.naechsteDockPos()

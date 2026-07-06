@@ -29,10 +29,9 @@ end
 
 local function printMaintenanceHelp()
   print("Wartungsmodus aktiv.")
-  print("edit koordinator/config.lua")
   print("update/koordinator")
-  print("rm startup.lua")
   print("koordinator/resume")
+  print("rm startup.lua")
 end
 
 local function response(target, ok, data, err, request)

@@ -113,7 +113,10 @@ function protocol.receive(timeout, filterFn)
       if wait <= 0 then return nil, nil, "timeout" end
     end
     local ok, sender, raw = pcall(rednet.receive, protocol.NAME, wait)
-    if not ok then return nil, nil, sender end
+    if not ok then
+      if tostring(sender) == "Terminated" then error(sender, 0) end
+      return nil, nil, sender
+    end
     if sender == nil then return nil, nil, "timeout" end
     local msg = protocol.decode(raw)
     if msg and (not filterFn or filterFn(msg, sender)) then
