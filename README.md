@@ -22,7 +22,7 @@ Beispiel fuer einen frischen Computer, nachdem die URL in `init.lua` korrekt geh
 
 ~~pastebin get <dein-init-pastebin-code> init.lua~~
 ```lua
-wget https://github.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
 init
 ```
 
