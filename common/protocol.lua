@@ -1,7 +1,14 @@
 -- Zweck: Rednet-Protokoll, Nachrichtentypen und sichere send/receive Wrapper.
 -- Erwartet: CC:Tweaked APIs rednet, peripheral, textutils, os.
 
-local util = dofile("common/util.lua")
+local function loadUtil()
+  if fs and fs.exists and fs.exists("common/util.lua") then
+    return dofile("common/util.lua")
+  end
+  return dofile("Flotte/common/util.lua")
+end
+
+local util = loadUtil()
 
 local protocol = {}
 protocol.NAME = "flotte_v1"
@@ -64,6 +71,8 @@ end
 function protocol.send(targetId, kind, payload)
   local okOpen, err = openAnyModem()
   if not okOpen then return false, err end
+  targetId = tonumber(targetId)
+  if not targetId then return false, "Ungueltige Ziel-ID" end
   local msg = protocol.wrap(kind, payload)
   local encoded = textutils.serialize(msg)
   local ok, sendErr = pcall(rednet.send, tonumber(targetId), encoded, protocol.NAME)

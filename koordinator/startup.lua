@@ -16,8 +16,12 @@ koordinator.LISTEN_TIMEOUT = 0.5
 
 local phase = "IDLE"
 
-local function response(target, ok, data, err)
-  return protocol.send(target, protocol.RESPONSE, { ok = ok, data = data, error = err })
+local function response(target, ok, data, err, request)
+  local payload = { ok = ok, data = data, error = err }
+  if request and request.msgId then payload.replyTo = request.msgId end
+  local sent, sendErr = protocol.send(target, protocol.RESPONSE, payload)
+  print("Antwort an " .. tostring(target) .. ": " .. tostring(sent) .. (sendErr and (" (" .. tostring(sendErr) .. ")") or ""))
+  return sent, sendErr
 end
 
 local function currentStatus()
@@ -32,24 +36,25 @@ local function currentStatus()
 end
 
 local function handleCommand(sender, msg)
+  print("Kommando empfangen: " .. tostring(msg.type) .. " von " .. tostring(sender))
   if msg.type == protocol.CMD_LIST then
-    return response(sender, true, currentStatus())
+    return response(sender, true, currentStatus(), nil, msg)
   elseif msg.type == protocol.CMD_STATUS then
-    return response(sender, true, currentStatus())
+    return response(sender, true, currentStatus(), nil, msg)
   elseif msg.type == protocol.CMD_BERICHT then
     local jobId = msg.payload and msg.payload.jobId
     local data, err
     if msg.payload and msg.payload.voll then data, err = reports.lesen(jobId) else data, err = reports.kurzfassung(jobId) end
-    return response(sender, data ~= nil, data, err)
+    return response(sender, data ~= nil, data, err, msg)
   elseif msg.type == protocol.CMD_ABBAU then
     local p = msg.payload or {}
     if not vec3.isVec(p.lager) or not vec3.isVec(p.von) or not vec3.isVec(p.bis) then
-      return response(sender, false, nil, "lager/von/bis muessen vec3 sein")
+      return response(sender, false, nil, "lager/von/bis muessen vec3 sein", msg)
     end
     local job, err = queue.createAbbau(p)
-    if not job then return response(sender, false, nil, err) end
+    if not job then return response(sender, false, nil, err, msg) end
     reports.erstellen(job)
-    return response(sender, true, { jobId = job.id, subtasks = #(job.subtasks or {}) })
+    return response(sender, true, { jobId = job.id, subtasks = #(job.subtasks or {}) }, nil, msg)
   end
 end
 

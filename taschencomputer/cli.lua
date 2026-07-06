@@ -1,17 +1,17 @@
 -- Zweck: Token-basierter CLI-Parser fuer flotte-Befehle auf Taschencomputern.
--- Erwartet: common/protocol.lua, common/vec3.lua.
+-- Erwartet: Flotte/common/protocol.lua, Flotte/common/vec3.lua.
 
-local protocol = dofile("common/protocol.lua")
-local vec3 = dofile("common/vec3.lua")
+local protocol = dofile("Flotte/common/protocol.lua")
+local vec3 = dofile("Flotte/common/vec3.lua")
 
 local cli = {}
 cli.RESPONSE_WINDOW = 1.5
 
 local function usage()
-  print("flotte list")
-  print("flotte status id:<koordId>")
-  print("flotte bericht id:<jobId> [--voll]")
-  print("flotte abbau id:<koordId> lager:x,y,z von:x,y,z bis:x,y,z")
+  print("Flotte/flotte list")
+  print("Flotte/flotte status id:<koordId>")
+  print("Flotte/flotte bericht id:<jobId> [--voll]")
+  print("Flotte/flotte abbau id:<koordId> lager:x,y,z von:x,y,z bis:x,y,z")
 end
 
 local function parseArgs(args)
@@ -33,9 +33,18 @@ local function expectVec(parsed, key)
   return v
 end
 
-local function waitResponse()
-  local _, msg = protocol.receive(5, function(m) return m.type == protocol.RESPONSE end)
-  if not msg then print("Keine Antwort."); return nil end
+local function printSendError(err)
+  print("Senden fehlgeschlagen: " .. tostring(err or "unbekannter Rednet-Fehler"))
+end
+
+local function waitResponse(expectedSender, replyTo)
+  local sender, msg, err = protocol.receive(5, function(m, from)
+    if m.type ~= protocol.RESPONSE then return false end
+    if expectedSender and tonumber(from) ~= tonumber(expectedSender) then return false end
+    if replyTo and (not m.payload or m.payload.replyTo ~= replyTo) then return false end
+    return true
+  end)
+  if not msg then print("Keine Antwort" .. (err and err ~= "timeout" and (": " .. tostring(err)) or ".") ); return nil end
   if not msg.payload.ok then print("Fehler: " .. tostring(msg.payload.error)); return nil end
   return msg.payload.data
 end
@@ -50,11 +59,14 @@ local function printStatus(data)
 end
 
 function cli.list()
-  protocol.broadcast(protocol.CMD_LIST, {})
+  local ok, msgIdOrErr = protocol.broadcast(protocol.CMD_LIST, {})
+  if not ok then printSendError(msgIdOrErr); return false end
   local untilTime = os.clock() + cli.RESPONSE_WINDOW
   local found = 0
   while os.clock() < untilTime do
-    local _, msg = protocol.receive(math.max(0.1, untilTime - os.clock()), function(m) return m.type == protocol.RESPONSE end)
+    local _, msg = protocol.receive(math.max(0.1, untilTime - os.clock()), function(m)
+      return m.type == protocol.RESPONSE and (not m.payload or not m.payload.replyTo or m.payload.replyTo == msgIdOrErr)
+    end)
     if msg and msg.payload and msg.payload.ok then
       found = found + 1
       local data = msg.payload.data or {}
@@ -62,14 +74,17 @@ function cli.list()
     end
   end
   if found == 0 then print("Keine Koordinatoren gefunden.") end
+  return true
 end
 
 function cli.status(parsed)
   local id = tonumber(parsed.id)
   if not id then print("id:<koordId> fehlt"); return end
-  protocol.send(id, protocol.CMD_STATUS, {})
-  local data = waitResponse()
+  local ok, msgIdOrErr = protocol.send(id, protocol.CMD_STATUS, {})
+  if not ok then printSendError(msgIdOrErr); return false end
+  local data = waitResponse(id, msgIdOrErr)
   if data then printStatus(data) end
+  return data ~= nil
 end
 
 local function coordinatorFromJobId(jobId)
@@ -81,8 +96,9 @@ function cli.bericht(parsed)
   if not parsed.id then print("id:<jobId> fehlt"); return end
   local koord = coordinatorFromJobId(parsed.id)
   if not koord then print("Koordinator-ID nicht aus jobId lesbar"); return end
-  protocol.send(koord, protocol.CMD_BERICHT, { jobId = parsed.id, voll = parsed.flags.voll })
-  local data = waitResponse()
+  local ok, msgIdOrErr = protocol.send(koord, protocol.CMD_BERICHT, { jobId = parsed.id, voll = parsed.flags.voll })
+  if not ok then printSendError(msgIdOrErr); return false end
+  local data = waitResponse(koord, msgIdOrErr)
   if not data then return end
   print("Bericht " .. tostring(data.jobId) .. " Status: " .. tostring(data.status))
   if data.zusammenfassung then
@@ -91,6 +107,7 @@ function cli.bericht(parsed)
   if parsed.flags.voll and data.subtasks then
     for _, task in ipairs(data.subtasks) do print(task.id .. " " .. task.status) end
   end
+  return true
 end
 
 function cli.abbau(parsed)
@@ -100,23 +117,25 @@ function cli.abbau(parsed)
   local von, e2 = expectVec(parsed, "von")
   local bis, e3 = expectVec(parsed, "bis")
   if not lager or not von or not bis then print(e1 or e2 or e3); return end
-  protocol.send(id, protocol.CMD_ABBAU, { lager = lager, von = von, bis = bis })
-  local data = waitResponse()
+  local ok, msgIdOrErr = protocol.send(id, protocol.CMD_ABBAU, { lager = lager, von = von, bis = bis })
+  if not ok then printSendError(msgIdOrErr); return false end
+  local data = waitResponse(id, msgIdOrErr)
   if data then print("Job angelegt: " .. tostring(data.jobId) .. " (" .. tostring(data.subtasks) .. " Layer)") end
+  return data ~= nil
 end
 
 function cli.run(args)
-  if #args == 0 or args[1] ~= "flotte" then usage(); return false end
-  local cmd = args[2]
+  if #args == 0 then usage(); return false end
+  local offset = (args[1] == "flotte") and 1 or 0
+  local cmd = args[1 + offset]
   local rest = {}
-  for i = 3, #args do rest[#rest + 1] = args[i] end
+  for i = 2 + offset, #args do rest[#rest + 1] = args[i] end
   local parsed = parseArgs(rest)
-  if cmd == "list" then cli.list()
-  elseif cmd == "status" then cli.status(parsed)
-  elseif cmd == "bericht" then cli.bericht(parsed)
-  elseif cmd == "abbau" then cli.abbau(parsed)
+  if cmd == "list" then return cli.list()
+  elseif cmd == "status" then return cli.status(parsed)
+  elseif cmd == "bericht" then return cli.bericht(parsed)
+  elseif cmd == "abbau" then return cli.abbau(parsed)
   else usage(); return false end
-  return true
 end
 
 return cli

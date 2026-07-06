@@ -14,7 +14,7 @@ local function get(url)
   return data
 end
 
-local function write(path, data)
+local function writeFile(path, data)
   local dir = fs.getDir(path)
   if dir and dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
   local h = fs.open(path, "w")
@@ -38,7 +38,7 @@ local function chooseRole()
   print("[1] Taschencomputer")
   print("[2] Koordinator")
   print("[3] Arbeiter")
-  write("Rolle: ")
+  if _G.write then _G.write("Rolle: ") else term.write("Rolle: ") end
   local choice = read()
   if choice == "1" then return "taschencomputer" end
   if choice == "2" then return "koordinator" end
@@ -46,10 +46,25 @@ local function chooseRole()
   return nil, "Ungueltige Auswahl"
 end
 
-local function installFile(path)
-  local data, err = get(init.RAW_BASE_URL .. path)
+local function normalizeEntry(entry, role)
+  if type(entry) == "string" then
+    if role == "taschencomputer" and string.sub(entry, 1, 7) == "common/" then
+      return entry, "Flotte/" .. entry
+    end
+    return entry, entry
+  end
+  if type(entry) == "table" and type(entry.src) == "string" then
+    return entry.src, entry.dest or entry.src
+  end
+  return nil, nil, "Ungueltiger Manifest-Eintrag"
+end
+
+local function installFile(entry, role)
+  local src, dest, entryErr = normalizeEntry(entry, role)
+  if not src then return false, entryErr end
+  local data, err = get(init.RAW_BASE_URL .. src)
   if not data then return false, err end
-  return write(path, data)
+  return writeFile(dest, data)
 end
 
 function init.install()
@@ -63,15 +78,22 @@ function init.install()
   local files = {}
   for _, path in ipairs(manifest.common or {}) do files[#files + 1] = path end
   for _, path in ipairs((manifest.roles and manifest.roles[role]) or {}) do files[#files + 1] = path end
-  for _, path in ipairs(files) do
-    print("Lade " .. path)
-    local ok, fileErr = installFile(path)
+  for _, entry in ipairs(files) do
+    local src, dest = normalizeEntry(entry, role)
+    print("Lade " .. tostring(src) .. " -> " .. tostring(dest))
+    local ok, fileErr = installFile(entry, role)
     if not ok then print(fileErr); return false end
   end
   local startupPath = manifest.startup and manifest.startup[role]
-  if not startupPath or not fs.exists(startupPath) then print("Startup-Datei fehlt im Manifest."); return false end
-  if fs.exists("startup.lua") then fs.delete("startup.lua") end
-  fs.copy(startupPath, "startup.lua")
+  if startupPath then
+    local _, startupDest = normalizeEntry(startupPath, role)
+    startupDest = startupDest or startupPath
+    if not fs.exists(startupDest) then print("Startup-Datei fehlt im Manifest: " .. tostring(startupDest)); return false end
+    if fs.exists("startup.lua") then fs.delete("startup.lua") end
+    fs.copy(startupDest, "startup.lua")
+  elseif role == "taschencomputer" and fs.exists("startup.lua") then
+    fs.delete("startup.lua")
+  end
   print("Flotte installiert als Rolle: " .. role)
   local running = shell and shell.getRunningProgram and shell.getRunningProgram()
   if running and fs.exists(running) then fs.delete(running) end
