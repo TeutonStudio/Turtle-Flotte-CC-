@@ -5,7 +5,7 @@ local protocol = dofile("Flotte/common/protocol.lua")
 local vec3 = dofile("Flotte/common/vec3.lua")
 
 local cli = {}
-cli.RESPONSE_WINDOW = 1.5
+cli.RESPONSE_WINDOW = 5
 
 local function usage()
   print("Flotte/flotte list")
@@ -73,7 +73,11 @@ function cli.list()
       printStatus(data)
     end
   end
-  if found == 0 then print("Keine Koordinatoren gefunden.") end
+  if found == 0 then
+    print("Keine Koordinatoren gefunden.")
+    print("Diagnose: Rednet-Broadcast wurde gesendet, aber es kam keine Antwort.")
+    print("Pruefe Koordinator-ID, Modem/Ender-Modem, Reichweite und ob der Koordinator den aktuellen Code ausfuehrt.")
+  end
   return true
 end
 

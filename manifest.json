@@ -3,21 +3,41 @@
   "roles": {
     "taschencomputer": [
       { "src": "taschencomputer/cli.lua", "dest": "Flotte/cli.lua" },
-      { "src": "taschencomputer/flotte.lua", "dest": "Flotte/flotte.lua" }
+      { "src": "taschencomputer/flotte.lua", "dest": "Flotte/flotte.lua" },
+      { "src": "update/core.lua", "dest": "Flotte/update/core.lua" },
+      { "src": "update/taschencomputer.lua", "dest": "Flotte/update/taschencomputer.lua" }
     ],
     "koordinator": [
       "koordinator/queue.lua", "koordinator/workers.lua", "koordinator/deploy.lua",
-      "koordinator/economy.lua", "koordinator/reports.lua", "koordinator/jobs/abbau.lua", "koordinator/startup.lua"
+      "koordinator/economy.lua", "koordinator/reports.lua", "koordinator/jobs/abbau.lua", "koordinator/startup.lua",
+      "update/core.lua", "update/koordinator.lua"
     ],
     "arbeiter": [
       "arbeiter/state.lua",
       "arbeiter/beruf/schaufel.lua", "arbeiter/beruf/spitzhacke.lua", "arbeiter/beruf/axt.lua", "arbeiter/beruf/werkbank.lua",
-      "arbeiter/startup.lua"
+      "arbeiter/startup.lua", "update/core.lua", "update/arbeiter.lua"
     ]
   },
   "startup": {
     "taschencomputer": false,
     "koordinator": "koordinator/startup.lua",
     "arbeiter": "arbeiter/startup.lua"
+  },
+  "update": {
+    "taschencomputer": {
+      "managed": ["Flotte", "taschencomputer"],
+      "removeStartup": true,
+      "reboot": false
+    },
+    "koordinator": {
+      "managed": ["common", "koordinator", "update", "startup.lua"],
+      "removeStartup": false,
+      "reboot": true
+    },
+    "arbeiter": {
+      "managed": ["common", "arbeiter", "update", "startup.lua"],
+      "removeStartup": false,
+      "reboot": true
+    }
   }
 }

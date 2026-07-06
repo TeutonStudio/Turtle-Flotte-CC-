@@ -12,7 +12,7 @@ local reports = dofile("koordinator/reports.lua")
 
 local koordinator = {}
 koordinator.DISPATCH_INTERVAL = 1
-koordinator.LISTEN_TIMEOUT = 0.5
+koordinator.LISTEN_TIMEOUT = 0.05
 
 local phase = "IDLE"
 
@@ -143,10 +143,13 @@ function koordinator.main()
   local ok, err = protocol.ensureOpen()
   if not ok then print("Rednet nicht bereit: " .. tostring(err)); return false end
   print("Flotte-Koordinator " .. tostring(os.getComputerID()) .. " bereit.")
+  local lastTick = os.clock()
   while true do
     koordinator.pollNetwork()
-    koordinator.tick()
-    sleep(koordinator.DISPATCH_INTERVAL)
+    if os.clock() - lastTick >= koordinator.DISPATCH_INTERVAL then
+      koordinator.tick()
+      lastTick = os.clock()
+    end
   end
 end
 
