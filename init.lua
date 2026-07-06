@@ -3,7 +3,7 @@
 
 local init = {}
 
-init.RAW_BASE_URL = "https://github.com/TeutonStudio/Turtle-Flotte-CC-"
+init.RAW_BASE_URL = "https://github.com/TeutonStudio/Turtle-Flotte-CC-/blob/master/"
 init.MANIFEST_URL = init.RAW_BASE_URL .. "manifest.json"
 
 local function get(url)
