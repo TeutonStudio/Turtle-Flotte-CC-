@@ -5,7 +5,7 @@ local protocol = dofile("common/protocol.lua")
 local vec3 = dofile("common/vec3.lua")
 
 local state = {}
-state.FUEL_THRESHOLD = 50
+state.FUEL_THRESHOLD = 250
 state.GPS_TIMEOUT = 2
 state.MOVE_GUARD = 4096
 
@@ -17,20 +17,34 @@ local beruf = nil
 local lastTaskPos = nil
 local heading = nil
 
-local function equippedName()
+local function equippedNames()
   local okL, left = pcall(turtle.getEquippedLeft)
   local okR, right = pcall(turtle.getEquippedRight)
-  local name = ""
-  if okL and type(left) == "table" and left.name then name = name .. left.name end
-  if okR and type(right) == "table" and right.name then name = name .. " " .. right.name end
-  return name
+  local names = {}
+  if okL and type(left) == "table" and left.name then names[#names + 1] = left.name end
+  if okR and type(right) == "table" and right.name then names[#names + 1] = right.name end
+  return names
+end
+
+local function nameContains(name, needle)
+  local lower = string.lower(tostring(name or ""))
+  return string.find(lower, needle, 1, true) ~= nil
 end
 
 function state.detectBeruf()
-  local name = equippedName()
-  if string.find(name, "shovel") then return "schaufel" end
-  if string.find(name, "axe") then return "axt" end
-  if string.find(name, "craft") or string.find(name, "workbench") then return "werkbank" end
+  local names = equippedNames()
+  for _, name in ipairs(names) do
+    if nameContains(name, "pickaxe") then return "spitzhacke", names end
+  end
+  for _, name in ipairs(names) do
+    if nameContains(name, "shovel") or nameContains(name, "spade") then return "schaufel", names end
+  end
+  for _, name in ipairs(names) do
+    if nameContains(name, "crafting") or nameContains(name, "workbench") or nameContains(name, "crafting_table") then return "werkbank", names end
+  end
+  for _, name in ipairs(names) do
+    if nameContains(name, "axe") then return "axt", names end
+  end
   return "spitzhacke"
 end
 
@@ -70,14 +84,38 @@ local function waitFor(kind)
   end
 end
 
+local function waitForFuelInstruction(timeout)
+  local _, msg = protocol.receive(timeout or 10, function(m)
+    return m.type == protocol.REFUEL or m.type == protocol.RETURN_TO_DOCK or m.type == protocol.RETURN_TO_STORAGE
+  end)
+  return msg
+end
+
 function state.checkNeeds()
+  state.refuelFromInventory()
   if turtle.getFuelLevel() ~= "unlimited" and turtle.getFuelLevel() < state.FUEL_THRESHOLD then
     status = "problem"
     protocol.send(koordinatorId, protocol.WORKER_PROBLEM, { art = "fuel", position = pos() })
-    waitFor(protocol.REFUEL)
-    for slot = 1, 16 do
-      turtle.select(slot)
-      if turtle.getItemCount(slot) > 0 then turtle.refuel() end
+    local before = turtle.getFuelLevel()
+    local msg = waitForFuelInstruction(10)
+    if not msg then
+      return false, "Fuel zu niedrig und kein Nachschub/Rueckkehrbefehl erhalten"
+    end
+    if msg.type == protocol.RETURN_TO_DOCK then
+      local dockPos = msg.payload and msg.payload.dockPos
+      if vec3.isVec(dockPos) then state.goTo(dockPos) end
+      protocol.send(koordinatorId, protocol.READY_AT_DOCK, { position = pos() })
+      return false, "Fuel-Problem: Rueckkehr zum Dock angefordert"
+    end
+    if msg.type == protocol.RETURN_TO_STORAGE then
+      state.unloadAtStorage(msg.payload and msg.payload.lager)
+    end
+    state.refuelFromInventory()
+    local after = turtle.getFuelLevel()
+    if after ~= "unlimited" and before ~= "unlimited" and after <= before then
+      protocol.send(koordinatorId, protocol.WORKER_PROBLEM, { art = "fuel", position = pos(), error = "REFUEL erhalten, aber kein lokaler Fuel verfuegbar" })
+      status = "problem"
+      return false, "Fuel weiterhin zu niedrig"
     end
     status = "ARBEITEN"
   end
@@ -88,13 +126,22 @@ function state.checkNeeds()
     state.unloadAtStorage(msg.payload and msg.payload.lager)
     status = "ARBEITEN"
   end
+  return true
 end
 
 local function forwardDig()
-  if beruf and beruf.digForward then beruf.digForward() else turtle.dig() end
+  if beruf and beruf.digForward then
+    local digOk, digErr = beruf.digForward()
+    if digOk == false and turtle.detect() then return false, digErr or "Graben nach vorne fehlgeschlagen" end
+  else
+    local digOk, digErr = turtle.dig()
+    if digOk == false and turtle.detect() then return false, digErr or "Graben nach vorne fehlgeschlagen" end
+  end
   local ok = turtle.forward()
-  state.checkNeeds()
-  return ok
+  if not ok then return false, "Vorwaertsbewegung blockiert" end
+  local needsOk, needsErr = state.checkNeeds()
+  if not needsOk then return false, needsErr end
+  return true
 end
 
 local function calibrateHeading()
@@ -165,13 +212,26 @@ local function moveVertical(targetY)
     if not p then return false, err end
     if p.y == targetY then return true end
     if p.y < targetY then
-      if beruf and beruf.digUp then beruf.digUp() else turtle.digUp() end
+      if beruf and beruf.digUp then
+        local digOk, digErr = beruf.digUp()
+        if digOk == false and turtle.detectUp() then return false, digErr or "Graben nach oben fehlgeschlagen" end
+      else
+        local digOk, digErr = turtle.digUp()
+        if digOk == false and turtle.detectUp() then return false, digErr or "Graben nach oben fehlgeschlagen" end
+      end
       if not turtle.up() then return false, "Aufstieg blockiert" end
     else
-      if beruf and beruf.digDown then beruf.digDown() else turtle.digDown() end
+      if beruf and beruf.digDown then
+        local digOk, digErr = beruf.digDown()
+        if digOk == false and turtle.detectDown() then return false, digErr or "Graben nach unten fehlgeschlagen" end
+      else
+        local digOk, digErr = turtle.digDown()
+        if digOk == false and turtle.detectDown() then return false, digErr or "Graben nach unten fehlgeschlagen" end
+      end
       if not turtle.down() then return false, "Abstieg blockiert" end
     end
-    state.checkNeeds()
+    local needsOk, needsErr = state.checkNeeds()
+    if not needsOk then return false, needsErr end
     guard = guard + 1
   end
   return false, "Bewegungsabbruch durch Sicherheitszaehler"
@@ -195,12 +255,21 @@ function state.mineLayer(task)
   if not ok then return false, err end
   for x = p.xMin, p.xMax do
     local span = p.zMax - p.zMin
-    for _ = 1, span do forwardDig() end
+    for _ = 1, span do
+      local ok, err = forwardDig()
+      if not ok then return false, err end
+    end
     if x < p.xMax then
       if (x % 2) == 0 then
-        turtle.turnLeft(); forwardDig(); turtle.turnLeft()
+        turtle.turnLeft()
+        local okMove, moveErr = forwardDig()
+        if not okMove then return false, moveErr end
+        turtle.turnLeft()
       else
-        turtle.turnRight(); forwardDig(); turtle.turnRight()
+        turtle.turnRight()
+        local okMove, moveErr = forwardDig()
+        if not okMove then return false, moveErr end
+        turtle.turnRight()
       end
     end
   end
@@ -219,8 +288,12 @@ end
 
 function state.register()
   status = "REGISTER"
-  berufName = state.detectBeruf()
+  local names
+  berufName, names = state.detectBeruf()
   beruf = loadBeruf(berufName)
+  print("Equipment: " .. table.concat(names or {}, ", "))
+  print("Beruf erkannt: " .. tostring(berufName))
+  state.refuelFromInventory()
   protocol.broadcast(protocol.WORKER_REGISTER, {
     id = os.getComputerID(),
     beruf = berufName,
@@ -267,10 +340,27 @@ function state.loop(initialMsg)
       protocol.send(koordinatorId, protocol.READY_AT_DOCK, { position = pos() })
       return
     elseif msg and msg.type == protocol.REFUEL then
-      for slot = 1, 16 do turtle.select(slot); turtle.refuel() end
+      state.refuelFromInventory()
     end
     msg = nil
   end
+end
+
+function state.refuelFromInventory()
+  if not turtle or not turtle.refuel then return false, "Turtle API fehlt" end
+  if turtle.getFuelLevel() == "unlimited" then return true end
+  local changed = false
+  for slot = 1, 16 do
+    if turtle.getItemCount(slot) > 0 then
+      turtle.select(slot)
+      local ok, canFuel = pcall(turtle.refuel, 0)
+      if ok and canFuel then
+        pcall(turtle.refuel)
+        changed = true
+      end
+    end
+  end
+  return changed
 end
 
 function state.main()

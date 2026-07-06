@@ -2,25 +2,23 @@
 -- Erwartet: turtle, common/protocol.lua.
 
 local protocol = dofile("common/protocol.lua")
+local vec3 = dofile("common/vec3.lua")
 
 local economy = {}
 economy.FUEL_DROP_COUNT = 16
 
-local function selectFuelLikeItem()
-  if not turtle then return false end
-  for slot = 1, 16 do
-    if turtle.getItemCount(slot) > 0 then
-      turtle.select(slot)
-      return true
-    end
-  end
-  return false
-end
-
 function economy.handleFuel(worker)
   if not worker then return false, "Worker fehlt" end
-  if turtle and selectFuelLikeItem() then turtle.drop(economy.FUEL_DROP_COUNT) end
-  return protocol.send(worker.id, protocol.REFUEL, { count = economy.FUEL_DROP_COUNT })
+  if worker.dockPos and worker.position and vec3.equals(worker.dockPos, worker.position) then
+    print("Fuel-Problem: Worker " .. tostring(worker.id) .. " ist am Dock, manueller Nachschub moeglich.")
+    return protocol.send(worker.id, protocol.REFUEL, { count = 0, note = "refuel_from_local_inventory" })
+  end
+  if not worker.fuelProblemLogged then
+    print("Fuel-Nachschub nicht moeglich: Worker " .. tostring(worker.id) .. " nicht am Dock")
+    worker.fuelProblemLogged = true
+  end
+  worker.status = "problem"
+  return false, "Fuel-Nachschub nur am Dock oder per vorab geladenem Inventar moeglich"
 end
 
 function economy.handleInventory(worker, lager)

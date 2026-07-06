@@ -17,7 +17,7 @@ function workers.register(payload, dockPos)
   entry.status = "idle"
   entry.position = payload.position or entry.position
   entry.fuel = payload.fuel or entry.fuel or 0
-  entry.dockPos = dockPos or payload.dockPos or entry.dockPos
+  entry.dockPos = dockPos or payload.dockPos or payload.position or entry.dockPos
   entry.currentTask = nil
   registry[id] = entry
   return entry
@@ -28,6 +28,7 @@ function workers.updateStatus(id, payload)
   if not entry then return nil, "Worker unbekannt" end
   payload = payload or {}
   entry.status = payload.status or entry.status
+  if entry.status ~= "problem" then entry.fuelProblemLogged = nil end
   entry.position = payload.position or entry.position
   entry.fuel = payload.fuel or entry.fuel
   entry.currentTask = payload.currentTask or entry.currentTask
@@ -48,6 +49,7 @@ function workers.markIdle(id)
   if entry then
     entry.status = "idle"
     entry.currentTask = nil
+    entry.fuelProblemLogged = nil
   end
   return entry
 end
@@ -92,7 +94,8 @@ function workers.assignBest(job, worker)
   if not job or not worker then return nil end
   local best, bestScore = nil, nil
   for _, task in ipairs(job.subtasks or {}) do
-    if task.status == "pending" then
+    local berufPasst = (not task.requiredBeruf) or task.requiredBeruf == worker.beruf
+    if task.status == "pending" and berufPasst then
       local s = scoreTask(worker, task)
       if not bestScore or s < bestScore then
         best, bestScore = task, s

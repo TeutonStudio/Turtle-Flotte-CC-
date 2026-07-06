@@ -60,7 +60,7 @@ end
 
 local function handleWorker(sender, msg)
   if msg.type == protocol.WORKER_REGISTER then
-    local dock = deploy.naechsteDockPos()
+    local dock = deploy.naechsteDockPos() or (msg.payload and msg.payload.position)
     local entry = workers.register(msg.payload, dock)
     response(sender, true, { registered = true, dockPos = dock })
     return entry

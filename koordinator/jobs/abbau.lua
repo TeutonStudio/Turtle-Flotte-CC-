@@ -31,6 +31,7 @@ function abbau.planeSubtasks(job)
       jobId = job.id,
       typ = "mine_layer",
       params = { y = y, xMin = box.xMin, xMax = box.xMax, zMin = box.zMin, zMax = box.zMax },
+      requiredBeruf = nil,
       status = "pending",
       workerId = nil,
       zugewiesenAm = nil,
