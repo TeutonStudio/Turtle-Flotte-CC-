@@ -18,15 +18,13 @@ Flotte ist ein v1-Repository fuer ein Multi-Turtle-Wirtschaftssystem in CC: Twea
 
 ## Installation in CC:Tweaked
 
-Beispiel fuer einen frischen Computer, nachdem die URL in `init.lua` korrekt gehostet ist:
+Folgende init datei herunterladen:
 
-~~pastebin get <dein-init-pastebin-code> init.lua~~
 ```lua
-wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
-init
+wget https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua
 ```
 
-Alternativ kannst du `init.lua` manuell anlegen, den Inhalt einfuegen und ausfuehren.
+Danach ausführen und die Rolle des Gerätes auswählen.
 
 ## Erster Testlauf
 
