@@ -1,13 +1,7 @@
--- Zweck: Beispielkonfiguration fuer stationaere Koordinator-Setups.
+-- Zweck: Optionale Koordinator-Konfiguration fuer zukuenftige Erweiterungen.
 -- Erwartet: Wird optional nach koordinator/config.lua kopiert und dort angepasst.
 
 return {
-  -- Erlaubt: "north", "south", "east", "west".
-  heading = "north",
-
-  -- Erlaubt: "front", "back", "left", "right", "up", "down".
-  chestSide = "back",
-
-  -- V1-Standard: false. Nur fuer freie Testumgebungen aktivieren.
-  autoCalibrateHeading = false,
+  -- Deploy-v1 braucht keine Konfiguration:
+  -- Koordinator steht direkt auf der InitTruhe und platziert Worker nach vorne.
 }

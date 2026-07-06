@@ -10,7 +10,7 @@
     "koordinator": [
       "koordinator/queue.lua", "koordinator/workers.lua", "koordinator/deploy.lua",
       "koordinator/economy.lua", "koordinator/reports.lua", "koordinator/jobs/abbau.lua", "koordinator/startup.lua",
-      "koordinator/config.example.lua",
+      "koordinator/config.example.lua", "koordinator/maintenance.lua", "koordinator/resume.lua",
       "update/core.lua", "update/koordinator.lua"
     ],
     "arbeiter": [
@@ -32,7 +32,7 @@
     },
     "koordinator": {
       "managed": ["common", "koordinator", "update", "startup.lua"],
-      "preserve": ["koordinator/config.lua"],
+      "preserve": ["koordinator/config.lua", "koordinator/maintenance"],
       "removeStartup": false,
       "reboot": true
     },

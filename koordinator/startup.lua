@@ -16,6 +16,25 @@ koordinator.LISTEN_TIMEOUT = 0.05
 
 local phase = "IDLE"
 
+local function shouldEnterMaintenance()
+  if fs.exists("koordinator/maintenance") then return true end
+  print("Koordinator startet. Taste M fuer Wartungsmodus.")
+  local timer = os.startTimer(3)
+  while true do
+    local event, p1 = os.pullEvent()
+    if event == "char" and (p1 == "m" or p1 == "M") then return true end
+    if event == "timer" and p1 == timer then return false end
+  end
+end
+
+local function printMaintenanceHelp()
+  print("Wartungsmodus aktiv.")
+  print("edit koordinator/config.lua")
+  print("update/koordinator")
+  print("rm startup.lua")
+  print("koordinator/resume")
+end
+
 local function response(target, ok, data, err, request)
   local payload = { ok = ok, data = data, error = err }
   if request and request.msgId then payload.replyTo = request.msgId end
@@ -139,6 +158,10 @@ function koordinator.tick()
 end
 
 function koordinator.main()
+  if shouldEnterMaintenance() then
+    printMaintenanceHelp()
+    return true
+  end
   math.randomseed(util.now())
   local ok, err = protocol.ensureOpen()
   if not ok then print("Rednet nicht bereit: " .. tostring(err)); return false end
