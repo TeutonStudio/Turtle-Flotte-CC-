@@ -7,9 +7,26 @@ local protocol = dofile("common/protocol.lua")
 local deploy = {}
 deploy.START_FUEL_DROP_COUNT = 64
 deploy.REGISTER_TIMEOUT = 8
+deploy.DEFAULT_CHEST_SIDE = "back"
+deploy.COORDINATOR_MIN_FUEL = 20
 
 local placedQueue = {}
 local heading = nil
+local config = {}
+
+local function loadConfig()
+  local paths = { "koordinator/config.lua", "flotte_config.lua" }
+  for _, path in ipairs(paths) do
+    if fs.exists(path) then
+      local ok, loaded = pcall(dofile, path)
+      if ok and type(loaded) == "table" then return loaded end
+      print("Konfiguration nicht lesbar: " .. path)
+    end
+  end
+  return {}
+end
+
+config = loadConfig()
 
 local function itemName(slot)
   local detail = turtle.getItemDetail(slot)
@@ -43,6 +60,10 @@ end
 
 local function gpsPos()
   return vec3.fromGps(2)
+end
+
+local function isValidHeading(value)
+  return value == "north" or value == "south" or value == "east" or value == "west"
 end
 
 local function headingVector(name)
@@ -86,31 +107,148 @@ local function turnRight()
   elseif heading == "west" then heading = "north" end
 end
 
+local function turnAroundRaw()
+  turtle.turnLeft()
+  turtle.turnLeft()
+end
+
+local function fuelLevelText()
+  local ok, level = pcall(turtle.getFuelLevel)
+  if ok then return tostring(level) end
+  return "unbekannt"
+end
+
+function deploy.refuelFromInventory()
+  if not turtle or not turtle.refuel then return false, "Turtle API fehlt" end
+  if turtle.getFuelLevel() == "unlimited" then return true end
+  local changed = false
+  for slot = 1, 16 do
+    if turtle.getFuelLevel() ~= "unlimited" and turtle.getFuelLevel() >= deploy.COORDINATOR_MIN_FUEL then break end
+    if turtle.getItemCount(slot) > 0 then
+      turtle.select(slot)
+      local ok, canFuel = pcall(turtle.refuel, 0)
+      if ok and canFuel then
+        pcall(turtle.refuel, 1)
+        changed = true
+      end
+    end
+  end
+  return changed
+end
+
+local function hasFuelForMove()
+  local level = turtle.getFuelLevel()
+  return level == "unlimited" or level > 0
+end
+
+local function moveFailureMessage(context, moveErr)
+  local detected = false
+  local okDetect, detectResult = pcall(turtle.detect)
+  if okDetect then detected = detectResult end
+  return tostring(context) .. ": Bewegung vorwaerts nicht moeglich; fuel=" .. fuelLevelText() .. "; detect=" .. tostring(detected) .. "; reason=" .. tostring(moveErr or "unbekannt")
+end
+
+local function headingFromDelta(before, after)
+  local dx, dz = after.x - before.x, after.z - before.z
+  if dx == 1 then return "east" end
+  if dx == -1 then return "west" end
+  if dz == 1 then return "south" end
+  if dz == -1 then return "north" end
+  return nil
+end
+
+local function calibrateByForward(context)
+  local before, beforeErr = gpsPos()
+  if not before then return false, "GPS fuer Heading-Kalibrierung nicht verfuegbar: " .. tostring(beforeErr) end
+  local moved, moveErr = turtle.forward()
+  if not moved then return false, moveFailureMessage(context, moveErr) end
+  local after, afterErr = gpsPos()
+  local backOk, backErr = turtle.back()
+  if not after then return false, "GPS fuer Heading-Kalibrierung nicht verfuegbar: " .. tostring(afterErr) end
+  if not backOk then return false, "Heading-Kalibrierung: Rueckkehr zum Start fehlgeschlagen; reason=" .. tostring(backErr) end
+  local newHeading = headingFromDelta(before, after)
+  if not newHeading then return false, "Heading konnte aus GPS-Bewegung nicht bestimmt werden" end
+  heading = newHeading
+  return true
+end
+
+local function calibrateByBack()
+  local before, beforeErr = gpsPos()
+  if not before then return false, "GPS fuer Heading-Kalibrierung nicht verfuegbar: " .. tostring(beforeErr) end
+  local moved, moveErr = turtle.back()
+  if not moved then return false, "Rueckwaerts-Kalibrierung fehlgeschlagen; fuel=" .. fuelLevelText() .. "; reason=" .. tostring(moveErr or "unbekannt") end
+  local after, afterErr = gpsPos()
+  local forwardOk, forwardErr = turtle.forward()
+  if not after then return false, "GPS fuer Heading-Kalibrierung nicht verfuegbar: " .. tostring(afterErr) end
+  if not forwardOk then return false, "Heading-Kalibrierung: Rueckkehr zum Start fehlgeschlagen; reason=" .. tostring(forwardErr) end
+  local reverseHeading = headingFromDelta(before, after)
+  if reverseHeading == "north" then heading = "south"
+  elseif reverseHeading == "south" then heading = "north"
+  elseif reverseHeading == "east" then heading = "west"
+  elseif reverseHeading == "west" then heading = "east"
+  else return false, "Heading konnte aus Rueckwaerts-GPS-Bewegung nicht bestimmt werden" end
+  return true
+end
+
 local function calibrateHeading()
   if heading then return true end
-  local before, beforeErr = gpsPos()
-  if not before then return false, beforeErr or "GPS vor Heading-Kalibrierung fehlgeschlagen" end
-  if not turtle.forward() then return false, "Heading-Kalibrierung fehlgeschlagen: Feld vor Koordinator blockiert" end
-  local after, afterErr = gpsPos()
-  turtle.back()
-  if not after then return false, afterErr or "GPS nach Heading-Kalibrierung fehlgeschlagen" end
-  local dx, dz = after.x - before.x, after.z - before.z
-  if dx == 1 then heading = "east"
-  elseif dx == -1 then heading = "west"
-  elseif dz == 1 then heading = "south"
-  elseif dz == -1 then heading = "north"
-  else return false, "Heading konnte aus GPS-Bewegung nicht bestimmt werden" end
-  return true
+  if isValidHeading(config.heading) then
+    heading = config.heading
+    print("Heading aus Konfiguration: " .. heading)
+    return true
+  end
+  if not hasFuelForMove() then
+    return false, "Koordinator hat keinen Fuel fuer Heading-Kalibrierung; fuel=" .. fuelLevelText()
+  end
+
+  local errors = {}
+  local ok, err = calibrateByForward("Heading-Kalibrierung fehlgeschlagen")
+  if ok then return true end
+  errors[#errors + 1] = err
+
+  ok, err = calibrateByBack()
+  if ok then return true end
+  errors[#errors + 1] = err
+
+  turnLeft()
+  ok, err = calibrateByForward("Heading-Kalibrierung links fehlgeschlagen")
+  turnRight()
+  if ok then return true end
+  errors[#errors + 1] = err
+
+  turnRight()
+  ok, err = calibrateByForward("Heading-Kalibrierung rechts fehlgeschlagen")
+  turnLeft()
+  if ok then return true end
+  errors[#errors + 1] = err
+
+  print(table.concat(errors, " | "))
+  return false, "Heading-Kalibrierung nicht moeglich: keine freie Bewegungsrichtung oder kein Fuel"
+end
+
+local function suckFromSide(side)
+  if side == "front" then return turtle.suck() end
+  if side == "up" then return turtle.suckUp() end
+  if side == "down" then return turtle.suckDown() end
+  if side == "left" then turtle.turnLeft(); local ok = turtle.suck(); turtle.turnRight(); return ok end
+  if side == "right" then turtle.turnRight(); local ok = turtle.suck(); turtle.turnLeft(); return ok end
+  turnAroundRaw()
+  local ok = turtle.suck()
+  turnAroundRaw()
+  return ok
 end
 
 function deploy.suckFromChest()
   if not turtle then return false, "Turtle API fehlt" end
-  turnLeft()
-  turnLeft()
-  for _ = 1, 16 do turtle.suck() end
-  turnLeft()
-  turnLeft()
+  local side = config.chestSide or deploy.DEFAULT_CHEST_SIDE
+  for _ = 1, 16 do suckFromSide(side) end
   return true
+end
+
+local function moveForwardOrFail(context)
+  local moved, moveErr = turtle.forward()
+  if moved then return true end
+  return false, moveFailureMessage(context or "Deploy-Bewegung fehlgeschlagen", moveErr)
 end
 
 local function placeWorkerLeft()
@@ -153,9 +291,10 @@ end
 
 function deploy.auspacken(benoetigt)
   if not turtle then return {}, "Turtle API fehlt" end
+  deploy.suckFromChest()
+  deploy.refuelFromInventory()
   local headingOk, headingErr = calibrateHeading()
   if not headingOk then print(headingErr); return {}, headingErr end
-  deploy.suckFromChest()
   local placed = {}
   while #placed < (benoetigt or 1) do
     local okL, posL, errL = placeWorkerLeft()
@@ -164,7 +303,8 @@ function deploy.auspacken(benoetigt)
     local okR, posR, errR = placeWorkerRight()
     if okR then placed[#placed + 1] = posR else print(errR) end
     if not okL and not okR then break end
-    turtle.forward()
+    local moved, moveErr = moveForwardOrFail("Deploy-Vorschub")
+    if not moved then print(moveErr); break end
   end
   placedQueue = placed
   return placed
