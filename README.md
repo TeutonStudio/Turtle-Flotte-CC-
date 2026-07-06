@@ -21,7 +21,7 @@ Flotte ist ein v1-Repository fuer ein Multi-Turtle-Wirtschaftssystem in CC: Twea
 Beispiel fuer einen frischen Computer, nachdem die URL in `init.lua` korrekt gehostet ist:
 
 ```lua
-wget https://github.com/TeutonStudio/Turtle-Flotte-CC-/init.lua init.lua
+wget https://github.com/TeutonStudio/Turtle-Flotte-CC-/master/init.lua init.lua
 pastebin get <dein-init-pastebin-code> init.lua
 init.lua
 ```
