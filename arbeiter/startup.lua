@@ -1,6 +1,5 @@
--- Zweck: Startdatei fuer Arbeiter-Turtles.
--- Erwartet: common/* und arbeiter/state.lua im selben Dateibaum.
-
-local state = dofile("arbeiter/state.lua")
-state.main()
-return state
+-- Compatibility entry point: all runtime behavior lives in v2.
+local h=fs.open(".flotte/active","r")
+local root=h and h.readAll() or ""
+if h then h.close() end
+return shell.run(root.."v2/main.lua","--role","arbeiter",...)
