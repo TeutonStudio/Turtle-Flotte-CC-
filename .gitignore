@@ -1,0 +1,3 @@
+.flotte/
+__pycache__/
+*.luac

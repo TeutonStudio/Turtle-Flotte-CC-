@@ -1,45 +1,70 @@
 {
-  "common": ["common/protocol.lua", "common/vec3.lua", "common/util.lua"],
-  "roles": {
-    "taschencomputer": [
-      { "src": "taschencomputer/cli.lua", "dest": "Flotte/cli.lua" },
-      { "src": "taschencomputer/flotte.lua", "dest": "Flotte/flotte.lua" },
-      { "src": "update/core.lua", "dest": "Flotte/update/core.lua" },
-      { "src": "update/taschencomputer.lua", "dest": "Flotte/update/taschencomputer.lua" }
-    ],
-    "koordinator": [
-      "koordinator/queue.lua", "koordinator/workers.lua", "koordinator/deploy.lua",
-      "koordinator/economy.lua", "koordinator/reports.lua", "koordinator/jobs/abbau.lua", "koordinator/startup.lua",
-      "koordinator/maintenance.lua", "koordinator/resume.lua",
-      "update/core.lua", "update/koordinator.lua"
-    ],
-    "arbeiter": [
-      "arbeiter/state.lua",
-      "arbeiter/beruf/schaufel.lua", "arbeiter/beruf/spitzhacke.lua", "arbeiter/beruf/axt.lua", "arbeiter/beruf/werkbank.lua",
-      "arbeiter/startup.lua", "update/core.lua", "update/arbeiter.lua"
-    ]
-  },
-  "startup": {
-    "taschencomputer": false,
-    "koordinator": "koordinator/startup.lua",
-    "arbeiter": "arbeiter/startup.lua"
-  },
-  "update": {
-    "taschencomputer": {
-      "managed": ["Flotte", "taschencomputer"],
-      "removeStartup": true,
-      "reboot": false
+  "format": 2,
+  "version": "2.0.0",
+  "files": [
+    {
+      "path": "v2/bootstrap_startup.lua",
+      "bytes": 547,
+      "checksum": 1706899535
     },
-    "koordinator": {
-      "managed": ["common", "koordinator", "update", "startup.lua"],
-      "preserve": ["koordinator/maintenance"],
-      "removeStartup": false,
-      "reboot": true
+    {
+      "path": "v2/cli.lua",
+      "bytes": 2913,
+      "checksum": 124162481
     },
-    "arbeiter": {
-      "managed": ["common", "arbeiter", "update", "startup.lua"],
-      "removeStartup": false,
-      "reboot": true
+    {
+      "path": "v2/coordinator.lua",
+      "bytes": 37531,
+      "checksum": 1278705328
+    },
+    {
+      "path": "v2/inventory.lua",
+      "bytes": 6302,
+      "checksum": 760324351
+    },
+    {
+      "path": "v2/jobs.lua",
+      "bytes": 5772,
+      "checksum": 1046162889
+    },
+    {
+      "path": "v2/main.lua",
+      "bytes": 2321,
+      "checksum": 798101528
+    },
+    {
+      "path": "v2/nav.lua",
+      "bytes": 8117,
+      "checksum": 1016412656
+    },
+    {
+      "path": "v2/net.lua",
+      "bytes": 3433,
+      "checksum": 64230727
+    },
+    {
+      "path": "v2/setup.lua",
+      "bytes": 5788,
+      "checksum": 1705669684
+    },
+    {
+      "path": "v2/store.lua",
+      "bytes": 1616,
+      "checksum": 1600998889
+    },
+    {
+      "path": "v2/util.lua",
+      "bytes": 2573,
+      "checksum": 2077465648
+    },
+    {
+      "path": "v2/worker.lua",
+      "bytes": 15105,
+      "checksum": 1498489172
     }
+  ],
+  "installer": {
+    "bytes": 5169,
+    "checksum": 407199403
   }
 }

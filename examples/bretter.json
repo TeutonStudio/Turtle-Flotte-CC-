@@ -1,0 +1,6 @@
+{
+  "output": "minecraft:oak_planks",
+  "count": 4,
+  "grid": ["minecraft:oak_log", false, false, false, false, false, false, false, false],
+  "returns": {}
+}

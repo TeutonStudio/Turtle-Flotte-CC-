@@ -1,105 +1,95 @@
--- Zweck: Einmaliger Bootstrap-Installer fuer eine Flotte-Rolle.
--- Erwartet: http, fs, textutils, shell, os; RAW_BASE_URL/MANIFEST_URL muessen angepasst werden.
-
-local init = {}
-
-init.RAW_BASE_URL = "https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/master/"
-init.MANIFEST_URL = init.RAW_BASE_URL .. "manifest.json"
-
+-- Standalone installer. Every download is pinned to one resolved Git commit.
+local BASE='https://raw.githubusercontent.com/TeutonStudio/Turtle-Flotte-CC-/'
+local API='https://api.github.com/repos/TeutonStudio/Turtle-Flotte-CC-/commits/'
+local requestedRef=({...})[1]
+local function readFile(p)
+  if not fs.exists(p) then return nil end
+  local h=assert(fs.open(p,'r')); local s=h.readAll(); h.close(); return s
+end
+local function writeFile(p,s)
+  local dir=fs.getDir(p); if dir~='' then fs.makeDir(dir) end
+  local h=assert(fs.open(p,'w'),'Nicht schreibbar: '..p); h.write(s); h.close()
+end
 local function get(url)
-  local ok, handleOrErr = pcall(http.get, url)
-  if not ok or not handleOrErr then return nil, "Download fehlgeschlagen: " .. tostring(url) end
-  local data = handleOrErr.readAll()
-  handleOrErr.close()
-  return data
+  local h,e=http.get(url)
+  assert(h,'Download fehlgeschlagen: '..url..' ('..tostring(e)..')')
+  local data=h.readAll(); h.close(); return data
 end
-
-local function writeFile(path, data)
-  local dir = fs.getDir(path)
-  if dir and dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
-  local h = fs.open(path, "w")
-  if not h then return false, "Kann Datei nicht schreiben: " .. path end
-  h.write(data or "")
-  h.close()
-  return true
+local function checksum(s)
+  local h=1; for i=1,#s do h=(h*31+s:byte(i))%2147483647 end; return h
 end
-
-local function parseManifest(raw)
-  if textutils.unserializeJSON then
-    local ok, data = pcall(textutils.unserializeJSON, raw)
-    if ok and type(data) == "table" then return data end
+local function switch(path,s)
+  writeFile(path..'.new',s)
+  if fs.exists(path..'.bak') then fs.delete(path..'.bak') end
+  if fs.exists(path) then fs.move(path,path..'.bak') end
+  fs.move(path..'.new',path)
+end
+local function install()
+  assert(http and http.get,'HTTP muss aktiviert sein')
+  local ref=requestedRef or readFile('.flotte/source') or 'master'
+  assert(ref:match('^[%w%._/%-]+$'),'Ungueltiger Git-Ref')
+  local commit=textutils.unserializeJSON(get(API..ref:gsub('/','%%2F'))).sha
+  assert(type(commit)=='string' and #commit==40 and commit:match('^%x+$'),'GitHub lieferte keinen gueltigen Commit')
+  local manifest=textutils.unserializeJSON(get(BASE..commit..'/manifest.json'))
+  assert(manifest.format==2 and type(manifest.files)=='table' and type(manifest.version)=='string' and manifest.version:match('^2%.%d+%.%d+$'),'Kein unterstuetztes v2-Manifest')
+  local role=readFile('.flotte/role')
+  if not role then
+    print('[1] Taschencomputer  [2] Koordinator  [3] Arbeiter')
+    write('Rolle: '); role=({['1']='taschencomputer',['2']='koordinator',['3']='arbeiter'})[read()]
   end
-  local ok, data = pcall(textutils.unserialize, raw)
-  if ok and type(data) == "table" then return data end
-  return nil, "Manifest ist nicht lesbar"
-end
-
-local function chooseRole()
-  print("[1] Taschencomputer")
-  print("[2] Koordinator")
-  print("[3] Arbeiter")
-  if _G.write then _G.write("Rolle: ") else term.write("Rolle: ") end
-  local choice = read()
-  if choice == "1" then return "taschencomputer" end
-  if choice == "2" then return "koordinator" end
-  if choice == "3" then return "arbeiter" end
-  return nil, "Ungueltige Auswahl"
-end
-
-local function normalizeEntry(entry, role)
-  if type(entry) == "string" then
-    if role == "taschencomputer" and string.sub(entry, 1, 7) == "common/" then
-      return entry, "Flotte/" .. entry
+  assert(role=='koordinator' or role=='arbeiter' or role=='taschencomputer','Ungueltige Rolle')
+  local newest,sequence=nil,-1
+  for _,suffix in ipairs({'','.next','.bak'}) do
+    local raw=readFile('.flotte/state'..suffix)
+    if raw then
+      local env=textutils.unserialize(raw)
+      if env and type(env.body)=='string' and type(env.seq)=='number' and checksum(env.body)==env.check then
+        local data=textutils.unserialize(env.body)
+        if data and env.seq>sequence then newest,sequence=data,env.seq end
+      end
     end
-    return entry, entry
   end
-  if type(entry) == "table" and type(entry.src) == "string" then
-    return entry.src, entry.dest or entry.src
+  if fs.exists('.flotte/state') or fs.exists('.flotte/state.next') or fs.exists('.flotte/state.bak') then assert(newest,'Zustand unlesbar; Update abgebrochen') end
+  if newest then
+    assert(newest.version==2,'Unbekanntes Zustandsformat')
+    assert(not newest.intent,'Ungeklaerten physischen Vorgang vor Update beheben')
+    assert(not newest.manager or not newest.manager.active,'Auftrag vor Update abschliessen oder abbrechen und einsammeln')
+    assert(not newest.worker or not newest.worker.task,'Arbeiter vor Update zurueckrufen')
   end
-  return nil, nil, "Ungueltiger Manifest-Eintrag"
+  local root='.flotte/releases/'..manifest.version..'-'..commit..'/'
+  if not fs.exists(root..'.complete') then
+    if fs.exists(root) then fs.delete(root) end
+    local seen={}
+    for _,file in ipairs(manifest.files) do
+      assert(type(file.path)=='string' and file.path:match('^v2/[%w_%-]+%.lua$') and not seen[file.path],'Ungueltiger oder doppelter Manifestpfad')
+      assert(type(file.bytes)=='number' and type(file.checksum)=='number','Dateipruefsumme fehlt')
+      seen[file.path]=true
+      local data=get(BASE..commit..'/'..file.path)
+      assert(#data==file.bytes and checksum(data)==file.checksum,'Downloadpruefung fehlgeschlagen: '..file.path)
+      assert(load(data,'@'..file.path),'Lua-Syntaxfehler: '..file.path)
+      writeFile(root..file.path,data); print('Geprueft: '..file.path)
+    end
+    assert(seen['v2/main.lua'] and seen['v2/bootstrap_startup.lua'],'Pflichtdatei fehlt')
+    writeFile(root..'.complete',commit)
+  end
+  if not readFile('.flotte/active') then
+    local backup='.flotte/v1-backup/'..os.epoch('utc')
+    for _,path in ipairs({'startup.lua','common','koordinator','arbeiter','taschencomputer','Flotte','update'}) do
+      if fs.exists(path) then fs.makeDir(backup); fs.copy(path,backup..'/'..path) end
+    end
+  end
+  local startup=assert(readFile(root..'v2/bootstrap_startup.lua'))
+  local installer=get(BASE..commit..'/init.lua')
+  assert(type(manifest.installer)=='table' and #installer==manifest.installer.bytes and checksum(installer)==manifest.installer.checksum,'Installerpruefung fehlgeschlagen')
+  assert(load(installer,'@init.lua'),'Installer enthaelt Lua-Syntaxfehler')
+  switch('.flotte/role',role)
+  switch('.flotte/source',ref)
+  switch('.flotte/active',root)
+  switch('startup.lua',startup)
+  switch('.flotte/installer.lua',installer)
+  print('Flotte '..manifest.version..' installiert ('..commit:sub(1,8)..').')
+  print('Konfiguration und Betriebsdaten erhalten. Neustart mit reboot.')
 end
-
-local function installFile(entry, role)
-  local src, dest, entryErr = normalizeEntry(entry, role)
-  if not src then return false, entryErr end
-  local data, err = get(init.RAW_BASE_URL .. src)
-  if not data then return false, err end
-  return writeFile(dest, data)
-end
-
-function init.install()
-  if not http or not http.get then print("HTTP API ist nicht aktiviert."); return false end
-  local raw, err = get(init.MANIFEST_URL)
-  if not raw then print(err); return false end
-  local manifest, parseErr = parseManifest(raw)
-  if not manifest then print(parseErr); return false end
-  local role, roleErr = chooseRole()
-  if not role then print(roleErr); return false end
-  local files = {}
-  for _, path in ipairs(manifest.common or {}) do files[#files + 1] = path end
-  for _, path in ipairs((manifest.roles and manifest.roles[role]) or {}) do files[#files + 1] = path end
-  for _, entry in ipairs(files) do
-    local src, dest = normalizeEntry(entry, role)
-    print("Lade " .. tostring(src) .. " -> " .. tostring(dest))
-    local ok, fileErr = installFile(entry, role)
-    if not ok then print(fileErr); return false end
-  end
-  local startupPath = manifest.startup and manifest.startup[role]
-  if startupPath then
-    local _, startupDest = normalizeEntry(startupPath, role)
-    startupDest = startupDest or startupPath
-    if not fs.exists(startupDest) then print("Startup-Datei fehlt im Manifest: " .. tostring(startupDest)); return false end
-    if fs.exists("startup.lua") then fs.delete("startup.lua") end
-    fs.copy(startupDest, "startup.lua")
-  elseif role == "taschencomputer" and fs.exists("startup.lua") then
-    fs.delete("startup.lua")
-  end
-  print("Flotte installiert als Rolle: " .. role)
-  local running = shell and shell.getRunningProgram and shell.getRunningProgram()
-  if running and fs.exists(running) then fs.delete(running) end
-  os.reboot()
-  return true
-end
-
-init.install()
-return init
+local ok,e=pcall(install)
+if not ok then printError('Installation abgebrochen; bisherige vollstaendige Fassung bleibt erhalten.\n'..tostring(e)); return false end
+return true

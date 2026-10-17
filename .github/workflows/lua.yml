@@ -1,0 +1,11 @@
+name: Flotte v2
+on: [push, pull_request]
+jobs:
+  simulation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y lua5.4
+      - run: find v2 tests -name '*.lua' -exec luac -p '{}' \;
+      - run: lua tests/run.lua
+      - run: python3 tools/build_manifest.py && git diff --exit-code -- manifest.json
